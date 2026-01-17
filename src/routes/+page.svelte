@@ -1,12 +1,21 @@
-<script>
+<script lang="ts">
 	import { preventDefault } from 'svelte/legacy';
 
 	let messages = [{ role: 'assistant', content: 'Salut ! je suis ton goat JEAN-Heude' }];
 	let currentMessage = '';
-	function sendMessage() {
+	let attente = false;
+	const attendre = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+	async function sendMessage() {
 		if (currentMessage.trim() === '') return;
-		messages = [...messages, { role: 'user', content: currentMessage }];
-		currentMessage = '';
+		attente = true;
+		try {
+			messages = [...messages, { role: 'user', content: currentMessage }];
+		} finally {
+			currentMessage = '';
+			await attendre(2000);
+			attente = false;
+		}
 	}
 </script>
 
@@ -21,8 +30,8 @@
 </div>
 
 <form class="chatter" on:submit|preventDefault={sendMessage}>
-	<input bind:value={currentMessage} placeholder="pose ta questio ..." />
-	<button class="button-go" type="submit">Envoyer</button>
+	<input bind:value={currentMessage} placeholder="pose ta question ..." />
+	<button class="button-go" disabled={attente} type="submit">Envoyer</button>
 </form>
 
 <style>
@@ -58,6 +67,9 @@
 		background-color: black;
 		border-radius: 20px;
 		width: fit-content;
+	}
+	.button-go:disabled {
+		background-color: grey;
 	}
 	.chatter {
 		padding-top: 20px;
