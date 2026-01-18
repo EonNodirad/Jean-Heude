@@ -10,7 +10,7 @@
 	async function sendMessage() {
 		if (currentMessage.trim() === '') return;
 		attente = true;
-		messages = [...messages, { role: 'user', content: currentMessage }];
+		messages = [{ role: 'user', content: currentMessage }, ...messages];
 
 		let reponse = await fetch('/api/chat', {
 			method: 'POST',
@@ -18,7 +18,7 @@
 			body: JSON.stringify({ content: currentMessage })
 		});
 		let result = await reponse.json();
-		messages = [...messages, { role: 'assistant', content: result.reply }];
+		messages = [{ role: 'assistant', content: result.reply }, ...messages];
 		currentMessage = '';
 		attente = false;
 	}
@@ -48,6 +48,9 @@
 		margin: 0 auto;
 		border-radius: 15px;
 		padding: 15px;
+		display: flex;
+		/* On inverse l'ordre : le premier élément HTML sera en bas */
+		flex-direction: column-reverse;
 	}
 	.user {
 		color: blue;

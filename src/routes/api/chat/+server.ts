@@ -9,6 +9,12 @@ export const POST: RequestHandler = async ({ request }) => {
     if (!messageRecu || messageRecu.trim() === "") {
         return json({ error: "message vide" }, { status: 400 })
     }
-
-    return json({ reply: 'message bien reçu par le serveur' });
+    //2 demande de l'IA
+    let demande = await fetch('http://127.0.0.1:8000/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: messageRecu })
+    })
+    let reponseIA = await demande.json()
+    return json({ reply: reponseIA.response });
 }
