@@ -4,18 +4,23 @@
 	let messages = [{ role: 'assistant', content: 'Salut ! je suis ton goat JEAN-Heude' }];
 	let currentMessage = '';
 	let attente = false;
+
 	const attendre = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 	async function sendMessage() {
 		if (currentMessage.trim() === '') return;
 		attente = true;
-		try {
-			messages = [...messages, { role: 'user', content: currentMessage }];
-		} finally {
-			currentMessage = '';
-			await attendre(2000);
-			attente = false;
-		}
+		messages = [...messages, { role: 'user', content: currentMessage }];
+
+		let reponse = await fetch('/api/chat', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ content: currentMessage })
+		});
+		let result = await reponse.json();
+		messages = [...messages, { role: 'assistant', content: result.reply }];
+		currentMessage = '';
+		attente = false;
 	}
 </script>
 
