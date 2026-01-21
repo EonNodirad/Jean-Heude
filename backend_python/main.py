@@ -12,7 +12,7 @@ class ChatInput(BaseModel):
 connection = sqlite3.connect("memoire.db")
 cursor = connection.cursor()
 
-cursor.execute("CREATE TABLE IF NOT EXISTS memory_chat (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT, timestamp TIMESTAMP, sessionID TEXT)")
+cursor.execute("CREATE TABLE IF NOT EXISTS memory_chat (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT, timestamp TIMESTAMP, sessionID INTEGER)")
 
 
 
@@ -22,4 +22,6 @@ async def chat_endpoint(input_data : ChatInput):
     # Jean-heude réfléchit
     response =memory.chat_with_memories(input_data.content)
     print(f"message reçu de Sveltekit : {input_data.content}")
+    
     return { "response": response}
+
