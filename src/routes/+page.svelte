@@ -1,22 +1,26 @@
 <script lang="ts">
+	import { PUBLIC_URL_SERVEUR_PYTHON } from '$env/static/public';
 	import { preventDefault } from 'svelte/legacy';
 	import { onMount } from 'svelte';
+	import nouvelleDiscussion from '$lib/assets/nouvelle-discussion.svg';
 	interface Session {
 		id: number;
 		resume: string;
 		date: string;
 	}
-	let messages = [{ role: 'assistant', content: 'Salut ! je suis ton goat JEAN-Heude' }];
-	let currentMessage = '';
-	let attente = false;
-	let sessionActive: number | null = null;
-	let historiques: Session[] = [];
+	let messages = $state([{ role: 'assistant', content: 'Salut ! je suis ton goat JEAN-Heude' }]);
+	let sessionActive = $state<number | null>(null);
+	let historiques = $state<any[]>([]);
+
+	let currentMessage = $state('');
+	let attente = $state(false);
 
 	const attendre = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 	onMount(async () => {
 		await rafraichirSession();
 	});
-	async function sendMessage() {
+	async function sendMessage(e: Event) {
+		e.preventDefault();
 		if (currentMessage.trim() === '') return;
 		attente = true;
 		messages = [{ role: 'user', content: currentMessage }, ...messages];
@@ -36,10 +40,20 @@
 		await rafraichirSession();
 	}
 	async function ChargerConversation(id: number) {
+		if (attente) return;
+
+		console.log('🔵 Tentative de chargement de la session :', id);
 		sessionActive = id;
-		const res = await fetch(`http://localhost:8000/history/${id}`);
+
+		const res = await fetch(`api/historique/${id}`);
 		if (res.ok) {
-			messages = await res.json();
+			const data = await res.json();
+
+			messages = [...data].reverse();
+
+			console.log('🟢 Interface mise à jour avec', messages.length, 'messages');
+		} else {
+			console.error('🔴 Erreur serveur Python :', res.status);
 		}
 	}
 	async function rafraichirSession() {
@@ -62,17 +76,24 @@
 			<button
 				class="message-historique"
 				class:active={sessionActive === historique.id}
-				on:click={() => ChargerConversation(historique.id)}
+				onclick={() => ChargerConversation(historique.id)}
 			>
 				{historique.resume}
 			</button>
 		{/each}
 	</div>
 	<div class="chat-widows">
-		<form class="chatter" on:submit|preventDefault={sendMessage}>
+		<form class="chatter" onsubmit={sendMessage}>
 			<input class="chat" bind:value={currentMessage} placeholder="pose ta question ..." />
 			<button class="button-go" disabled={attente} type="submit">Envoyer</button>
-			<button class="new-chat" on:click={() => nouveauChat()}> + nouveau </button>
+			<button
+				class="new-chat"
+				aria-label="Commencer une nouvelle discussion"
+				title="Nouvelle discussion"
+				onclick={() => nouveauChat()}
+			>
+				<img src={nouvelleDiscussion} aria-hidden="true" alt="" /></button
+			>
 		</form>
 		{#each messages as msg}
 			<p class={msg.role}>
@@ -181,32 +202,72 @@
 		box-shadow: 0 0 15px rgba(255, 154, 139, 0.6);
 	}
 	.button-go {
-		color: black;
-		background-color: #e7644f;
+		all: unset;
 		border-radius: 20px;
 		width: fit-content;
+		cursor: pointer;
 	}
 	.button-go:disabled {
 		background-color: grey;
 	}
+	.button-go:hover {
+		transform: scale(1.2); /* Petit effet de zoom */
+	}
 	.chatter {
-		padding: 20px 0 10px 10%;
-		padding-top: 20px;
+		background-color: black;
+		border-radius: 50px;
+		display: flex;
+		padding: 7px 0 7px 0;
+		align-items: center;
+		justify-content: center;
 		margin: 0 auto;
 		width: 100%;
+		color: #f3f4f6;
 	}
 	.chat {
+		all: unset;
+		padding-bottom: 5px;
+		flex-grow: 1;
 		border-radius: 20px;
-		padding-left: 10%;
-		width: 80%;
+		padding: 10px 20px;
+		outline: none;
+		width: 100%;
 	}
-	.chat:hover {
+	.chatter:hover {
 		transform: scale(1.02);
 		box-shadow: 0 0 15px rgba(255, 154, 139, 0.6);
 	}
-	.titre {
-		margin: 0 auto;
-		padding-bottom: 60px;
-		width: fit-content;
+
+	.new-chat {
+		all: unset;
+		width: 45px;
+		height: 45px;
+
+		/* On centre l'icône à l'intérieur */
+		display: flex;
+		justify-content: center;
+		align-items: center;
+
+		/* Style visuel */
+		border-radius: 8px;
+		cursor: pointer;
+		transition: all 0.2s ease;
+		padding: 0;
+	}
+
+	.new-chat img {
+		width: 30px;
+		height: 30px;
+		/* Si ton SVG est noir, ceci peut le rendre blanc/clair */
+		filter: invert(1);
+	}
+
+	.new-chat:hover {
+		transform: scale(1.3); /* Petit effet de zoom */
+	}
+
+	/* Effet quand on clique */
+	.new-chat:active {
+		transform: scale(0.95);
 	}
 </style>

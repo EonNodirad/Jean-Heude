@@ -4,13 +4,20 @@ import requests
 from mem0 import Memory 
 import IA
 
+from dotenv import load_dotenv
+
+load_dotenv()
+remote_host = os.getenv("URL_SERVER_OLLAMA")
+appelle_IA = os.getenv("APPELLE_SERVER_OLLAMA")
+
 model = "phi3:mini"
+
 config = {
     "llm": {
         "provider": "ollama",
         "config": {
             "model":model,
-            "ollama_base_url": "http://192.168.1.49:11434",
+            "ollama_base_url": remote_host,
             "temperature":0.1
         }
     },
@@ -18,7 +25,7 @@ config = {
         "provider": "ollama",
         "config": {
             "model":"nomic-embed-text",
-            "ollama_base_url": "http://192.168.1.49:11434",
+            "ollama_base_url": remote_host,
             "embedding_dims": 768
         }
     },
@@ -53,8 +60,6 @@ def chat_with_memories(message: str, user_id: str = "default_user") -> str:
 
 
 
-    messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": message}]
-
     payload = {
         "model": model,
         "messages": [
@@ -65,7 +70,7 @@ def chat_with_memories(message: str, user_id: str = "default_user") -> str:
     }
     # conversation
     try :
-        response = requests.post("http://192.168.1.49:11434/api/chat", json= payload)
+        response = requests.post(appelle_IA, json= payload)
         response.raise_for_status()
         assistant_response = response.json()['message']['content']
 

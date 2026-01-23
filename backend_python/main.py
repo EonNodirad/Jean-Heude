@@ -4,6 +4,8 @@ import IA
 import sqlite3
 import datetime
 import memory
+import os
+from dotenv import load_dotenv
 app = FastAPI()
 
 class ChatInput(BaseModel):

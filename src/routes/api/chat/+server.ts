@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
+import { PUBLIC_URL_SERVEUR_PYTHON } from '$env/static/public'
 
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -9,7 +10,7 @@ export const POST: RequestHandler = async ({ request }) => {
         return json({ error: "message vide" }, { status: 400 })
     }
     //2 demande de l'IA
-    let demande = await fetch('http://127.0.0.1:8000/chat', {
+    let demande = await fetch(`${PUBLIC_URL_SERVEUR_PYTHON}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: content, session_id: session_id })

@@ -1,9 +1,10 @@
-import ollama
+import os
+
 from ollama import Client
 from dotenv import load_dotenv
 
 load_dotenv()
-remote_host = 'http://192.168.1.49:11434'
+remote_host = os.getenv("URL_SERVER_OLLAMA")
 
 client = Client(host=remote_host)
 
