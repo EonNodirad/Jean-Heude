@@ -1,38 +1,47 @@
-# sv
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+# Jean-Heude 
 
-## Creating a project
+**J.E.A.N-H.E.U.D.E** is an AI orchestrator designed to be **100% local** and **fully-open-source**.
+By leveraging cuting-edge community projects, it provides a sovereign AI experience wihout compromising on privacy or performance.
 
-If you're seeing this, you've probably already done this step. Congrats!
+# Key Feature
 
-```sh
-# create a new project in the current directory
-npx sv create
+- **Total Sovereignty:** 100% local execution—your data never leaves your machine.
+    
+- **Unified Memory:** Powered by **Mem0**, allowing the AI to maintain a persistent and intelligent context across sessions.
+    
+- **Open Source:** Built entirely on transparent, extensible, and community-driven tools.
 
-# create a new project in my-app
-npx sv create my-app
-```
+# Technical stack
 
-## Developing
+The architecture is split into specialized layers for maximum efficiency:
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+- **Frontend:** Built with **SvelteKit** for a fast, modern, and reactive user interface.
+    
+- **Backend:** Developed in **Python**, handling the core logic and orchestration.
+    
+- **Vector Database:** Integration with **Qdrant** (running via Docker) to power the Mem0 memory layer.
+    
+- **Inference Engine:** Utilizes **Ollama** to serve both Large Language Models (LLMs) and Embedding models.
 
-```sh
-npm run dev
 
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
-```
+# Infrastructure Requirements
 
-## Building
+To get Jean-Heude up and running, you will need the following components:
 
-To create a production version of your app:
+1. **Ollama:** To manage and run your local models.
+    
+2. **Docker:** Specifically to host the **Qdrant** server for vector storage.
+    
+3. **Python 3.x:** To run the backend orchestrator.
+    
+4. **Node.js:** For the SvelteKit frontend environment.
 
-```sh
-npm run build
-```
 
-You can preview the production build with `npm run preview`.
+# Actual Version
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+**V3.5** : adding markdown format in the chat thanks to **markdownit**
+
+# Future feature
+
+**V4** : using little IA for choosing the best IA in the pool depending on the context
