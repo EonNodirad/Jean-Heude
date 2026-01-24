@@ -3,14 +3,17 @@ import os
 import requests
 from mem0 import Memory 
 import IA
-
+from ollama import Client
 from dotenv import load_dotenv
+
 
 load_dotenv()
 remote_host = os.getenv("URL_SERVER_OLLAMA")
 appelle_IA = os.getenv("APPELLE_SERVER_OLLAMA")
 
-model = "phi3:mini"
+client = Client(host=remote_host)
+
+model = "llama3.1:8b"
 
 config = {
     "llm": {
@@ -56,12 +59,13 @@ def chat_with_memories(message: str, user_id: str = "default_user") -> str:
         memories_str = "\n".join([f"- {m['memory']}" for m in relevant_memories["results"]])
 
 
-    system_prompt = f"You are a helpful AI named Jean-Heude. Answer the question based on query and memories.\nUser Memories:\n{memories_str}"
+    system_prompt = f"Tu est Jean-Heude un assistant personnelle. Ton but est d'être franc et réaliste pour donner la meilleure répose possible même si c'est contre le miens. Tu réponds en format Markdown en te basan sur les requête et ta mémoire.\nUser Memories:\n{memories_str}"
 
-
-
+    
+    messages = [{"role": "system", "content": system_prompt},
+            {"role": "user", "content": message}]
     payload = {
-        "model": model,
+        "model": "llama3.1:8b ",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": message}
@@ -70,9 +74,9 @@ def chat_with_memories(message: str, user_id: str = "default_user") -> str:
     }
     # conversation
     try :
-        response = requests.post(appelle_IA, json= payload)
-        response.raise_for_status()
-        assistant_response = response.json()['message']['content']
+        #response = requests.post(appelle_IA, json= payload)
+        response =  client.chat(model="llama3.1:8b", stream=False,messages=messages)
+        assistant_response = response.model_dump()['message']['content']
 
 
      # Create new memories from the conversation

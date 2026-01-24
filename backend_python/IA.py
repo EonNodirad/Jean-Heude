@@ -16,7 +16,7 @@ def create_message(message,role):
         'content' : message
     }
 
-def chat(chat_message):
+def chat(chat_message,model_used):
     ollama_response = client.chat(model=model_used, stream=False,messages=chat_message)
 
     #assistant_message = ''

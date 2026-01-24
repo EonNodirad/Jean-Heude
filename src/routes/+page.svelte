@@ -3,12 +3,50 @@
 	import { preventDefault } from 'svelte/legacy';
 	import { onMount } from 'svelte';
 	import nouvelleDiscussion from '$lib/assets/nouvelle-discussion.svg';
+	import markdownit from 'markdown-it';
+	import DOMPurify from 'isomorphic-dompurify';
+	import hljs from 'highlight.js';
+	import 'highlight.js/styles/github-dark.css';
+
+	function escapeHtml(unsafe: string) {
+		return unsafe
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#039;');
+	}
 	interface Session {
 		id: number;
 		resume: string;
 		date: string;
 	}
-	let messages = $state([{ role: 'assistant', content: 'Salut ! je suis ton goat JEAN-Heude' }]);
+	const md = markdownit({
+		html: false,
+		linkify: true,
+		typographer: true,
+		highlight(str, lang) {
+			if (lang && hljs.getLanguage(lang)) {
+				try {
+					return `<pre class="highlight" data-language="${lang.toUpperCase()}"><code>${
+						hljs.highlight(str, { language: lang, ignoreIllegals: true }).value
+					}</code></pre>`;
+				} catch (__) {}
+			}
+
+			return `<pre class="highlight"><code>${escapeHtml(str)}</code></pre>`;
+		}
+	});
+
+	const formatMessage = (content: string) => {
+		if (!content) return '';
+		const rawHTML = md.render(content);
+		return DOMPurify.sanitize(rawHTML);
+	};
+
+	let messages = $state([
+		{ role: 'assistant', content: 'Salut ! je suis ton assistant J.E.A.N-H.E.U.D.E' }
+	]);
 	let sessionActive = $state<number | null>(null);
 	let historiques = $state<any[]>([]);
 
@@ -82,7 +120,16 @@
 			</button>
 		{/each}
 	</div>
-	<div class="chat-widows">
+	<div class="chat-box">
+		<div class="chat-widows">
+			{#each messages as msg}
+				<div class={msg.role}>
+					<div class="message-content">
+						{@html formatMessage(msg.content)}
+					</div>
+				</div>
+			{/each}
+		</div>
 		<form class="chatter" onsubmit={sendMessage}>
 			<input class="chat" bind:value={currentMessage} placeholder="pose ta question ..." />
 			<button class="button-go" disabled={attente} type="submit">Envoyer</button>
@@ -95,11 +142,6 @@
 				<img src={nouvelleDiscussion} aria-hidden="true" alt="" /></button
 			>
 		</form>
-		{#each messages as msg}
-			<p class={msg.role}>
-				{msg.content}
-			</p>
-		{/each}
 	</div>
 </div>
 
@@ -119,6 +161,10 @@
 		width: 100%;
 		background-color: #1a2238;
 		font-family: sans-serif;
+	}
+	.chat-box {
+		height: 100%;
+		width: 80%;
 	}
 	.historique-windows {
 		height: 100%;
@@ -157,8 +203,8 @@
 	}
 	.chat-widows {
 		padding: 12px;
-		height: 100%;
-		width: 80%;
+		height: 90%;
+		width: 100%;
 		overflow-y: auto;
 		margin: 0 auto;
 		border-radius: 15px;
@@ -173,7 +219,9 @@
 		background-color: #e7644f;
 		margin-left: auto;
 		padding: 7px;
+		margin-bottom: 15px;
 		border-radius: 50px;
+		max-width: 85%;
 		width: fit-content;
 		box-shadow:
 			0 0 30px rgba(255, 154, 139, 0.4),
@@ -187,10 +235,12 @@
 	.assistant {
 		color: black;
 		background-color: #e7644f;
-		margin-right: auto;
-		padding: 7px;
+		margin-right: 0 auto;
+		margin-bottom: 15px;
+		padding: 20px;
 		border-radius: 50px;
 		width: fit-content;
+		max-width: 85%;
 		box-shadow:
 			0 0 30px rgba(255, 154, 139, 0.4),
 			0 0 30px rgba(255, 154, 139, 0.2);
@@ -200,6 +250,24 @@
 	.assistant:hover {
 		transform: scale(1.02); /* La bulle grossit légèrement au survol */
 		box-shadow: 0 0 15px rgba(255, 154, 139, 0.6);
+	}
+	:global(.message-content pre) {
+		background-color: #0d1117;
+		padding: 15px;
+		border-radius: 8px;
+		overflow-x: auto;
+		margin: 10px 0;
+		border: 1px solid #30363d;
+	}
+	:global(.message-content code) {
+		font-family: 'Fira Code', 'Courier New', monospace;
+		font-size: 0.9em;
+		color: #e6edf3;
+	}
+	:global(.message-content :not(pre) > code) {
+		background-color: rgba(110, 118, 129, 0.4);
+		padding: 0.2em 0.4em;
+		border-radius: 6px;
 	}
 	.button-go {
 		all: unset;

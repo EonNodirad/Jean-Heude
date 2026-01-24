@@ -9,5 +9,5 @@ declare global {
 		// interface Platform {}
 	}
 }
-
-export {};
+declare module 'markdown-it-task-lists';
+export { };
