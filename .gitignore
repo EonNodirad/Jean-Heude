@@ -28,6 +28,6 @@ vite.config.ts.timestamp-*
 
 # Memory
 
-/memory/.memoire.db
+/memory/memoire.db
 
 #Backend
