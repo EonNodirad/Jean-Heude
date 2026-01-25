@@ -1,11 +1,11 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-import IA
+
 import sqlite3
-import datetime
+
 import memory
-import os
-from dotenv import load_dotenv
+
+
 app = FastAPI()
 
 class ChatInput(BaseModel):
@@ -54,8 +54,8 @@ async def chat_endpoint(input_data : ChatInput):
 @app.get("/history")
 async def get_historique_list():
     cursor.execute("SELECT id,resume,timestamp FROM historique_chat ORDER BY timestamp DESC")
-    ligne = cursor.fetchall()
-    return [{"id":l[0],"resume":l[1], "timestamp":l[2]} for l in ligne]
+    lignes = cursor.fetchall()
+    return [{"id":ligne[0],"resume":ligne[1], "timestamp":ligne[2]} for ligne in lignes]
 
 @app.get("/history/{session_id}")
 async def get_history(session_id: int) :

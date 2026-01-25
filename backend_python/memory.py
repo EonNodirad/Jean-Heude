@@ -1,8 +1,8 @@
 
 import os
-import requests
+
 from mem0 import Memory 
-import IA
+
 from ollama import Client
 from dotenv import load_dotenv
 
@@ -59,19 +59,12 @@ def chat_with_memories(message: str, user_id: str = "default_user") -> str:
         memories_str = "\n".join([f"- {m['memory']}" for m in relevant_memories["results"]])
 
 
-    system_prompt = f"Tu est Jean-Heude un assistant personnelle. Ton but est d'être franc et réaliste pour donner la meilleure répose possible même si c'est contre le miens. Tu réponds en format Markdown en te basan sur les requête et ta mémoire.\nUser Memories:\n{memories_str}"
+    system_prompt = f"Tu es Jean-Heude un assistant personnelle. Ton but est d'être franc et réaliste pour donner la meilleure réponse possible même si c'est contre le miens. Tu réponds en format Markdown en te basant sur les requête et ta mémoire.\nUser Memories:\n{memories_str}"
 
     
     messages = [{"role": "system", "content": system_prompt},
             {"role": "user", "content": message}]
-    payload = {
-        "model": "llama3.1:8b ",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": message}
-        ],
-        "stream": False
-    }
+
     # conversation
     try :
         #response = requests.post(appelle_IA, json= payload)
