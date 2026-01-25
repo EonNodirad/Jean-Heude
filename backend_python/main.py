@@ -21,7 +21,7 @@ cursor.execute("CREATE TABLE IF NOT EXISTS historique_chat (id INTEGER PRIMARY K
 
 
 @app.post("/chat")
-
+#appele l'IA
 async def chat_endpoint(input_data : ChatInput):
 
     session_id = input_data.session_id
