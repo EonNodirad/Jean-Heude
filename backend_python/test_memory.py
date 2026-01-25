@@ -1,4 +1,4 @@
-import pytest
+
 from unittest.mock import MagicMock, patch
 with patch('os.getenv', side_effect=lambda k, d=None: "http://fake-url" if "URL" in k else d):
     with patch('mem0.Memory.from_config') as mock_mem_init:
