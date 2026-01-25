@@ -1,0 +1,22 @@
+# config.yaml
+llm:
+  provider: 'ollama'
+  config:
+    model: 'phi3:mini'
+    ollama_base_url: 'http://192.168.1.49:11434'
+    api_key: 'sk-no-key-needed'
+
+embedder:
+  provider: 'ollama'
+  config:
+    model: 'nomic-embed-text'
+    ollama_base_url: 'http://192.168.1.49:11434'
+    api_key: 'sk-no-key-needed'
+
+vector_store:
+  provider: 'qdrant'
+  config:
+    host: 'qdrant'
+    port: 6333
+
+version: 'v1.1'

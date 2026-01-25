@@ -1,59 +1,21 @@
 <script lang="ts">
-	import { PUBLIC_URL_SERVEUR_PYTHON } from '$env/static/public';
-	import { preventDefault } from 'svelte/legacy';
 	import { onMount } from 'svelte';
 	import nouvelleDiscussion from '$lib/assets/nouvelle-discussion.svg';
-	import markdownit from 'markdown-it';
-	import DOMPurify from 'isomorphic-dompurify';
-	import hljs from 'highlight.js';
+	import { formatMessage } from '$lib/format';
 	import 'highlight.js/styles/github-dark.css';
-
-	function escapeHtml(unsafe: string) {
-		return unsafe
-			.replace(/&/g, '&amp;')
-			.replace(/</g, '&lt;')
-			.replace(/>/g, '&gt;')
-			.replace(/"/g, '&quot;')
-			.replace(/'/g, '&#039;');
-	}
-	interface Session {
-		id: number;
-		resume: string;
-		date: string;
-	}
-	const md = markdownit({
-		html: false,
-		linkify: true,
-		typographer: true,
-		highlight(str, lang) {
-			if (lang && hljs.getLanguage(lang)) {
-				try {
-					return `<pre class="highlight" data-language="${lang.toUpperCase()}"><code>${
-						hljs.highlight(str, { language: lang, ignoreIllegals: true }).value
-					}</code></pre>`;
-				} catch (__) {}
-			}
-
-			return `<pre class="highlight"><code>${escapeHtml(str)}</code></pre>`;
-		}
-	});
-
-	const formatMessage = (content: string) => {
-		if (!content) return '';
-		const rawHTML = md.render(content);
-		return DOMPurify.sanitize(rawHTML);
-	};
 
 	let messages = $state([
 		{ role: 'assistant', content: 'Salut ! je suis ton assistant J.E.A.N-H.E.U.D.E' }
 	]);
 	let sessionActive = $state<number | null>(null);
-	let historiques = $state<any[]>([]);
+	interface Historique {
+		id: number;
+		resume: string;
+	}
+	let historiques = $state<Historique[]>([]);
 
 	let currentMessage = $state('');
 	let attente = $state(false);
-
-	const attendre = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 	onMount(async () => {
 		await rafraichirSession();
 	});
@@ -110,7 +72,7 @@
 <div class="container-global">
 	<div class="historique-windows">
 		<h2 class="historique-titre">Historique des conversations</h2>
-		{#each historiques as historique}
+		{#each historiques as historique (historique.id)}
 			<button
 				class="message-historique"
 				class:active={sessionActive === historique.id}
@@ -122,9 +84,10 @@
 	</div>
 	<div class="chat-box">
 		<div class="chat-widows">
-			{#each messages as msg}
+			{#each messages as msg (msg)}
 				<div class={msg.role}>
 					<div class="message-content">
+						<!-- eslint-disable-next-line svelte/no-at-html-tags -->
 						{@html formatMessage(msg.content)}
 					</div>
 				</div>

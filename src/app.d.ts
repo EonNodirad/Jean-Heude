@@ -10,4 +10,4 @@ declare global {
 	}
 }
 declare module 'markdown-it-task-lists';
-export { };
+export {};
