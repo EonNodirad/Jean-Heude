@@ -28,6 +28,9 @@ jobs:
   test:
     name: test
     runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ./backend_python
     timeout-minutes: 15
     continue-on-error: false
     steps:
@@ -41,10 +44,10 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Vérifier la qualité du code (Lint)
-        run: ruff check backend_python/
+        run: ruff check 
 
       - name: Lancer les tests
-        run: pytest backend_python/
+        run: pytest 
         env:
           URL_SERVER_OLLAMA: ${{ secrets.URL_SERVER_OLLAMA }}
           APPELLE_SERVER_OLLAMA: ${{ secrets.APPELLE_SERVER_OLLAMA }}
