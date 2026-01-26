@@ -35,19 +35,29 @@ config = {
     "vector_store": {
         "provider":"qdrant",
         "config":{
-            "host": "qdrant",
+            "host": "URL_QDRANT",
             "port": 6333,
             "embedding_model_dims": 768
         }
     }
 }
 #initit
-memory =Memory.from_config(config)
+
 
 list_models =orchestrator.get_local_models()
+_memory_instance = None
+
+
+def get_memory():
+    """Initialise la mémoire seulement au premier appel"""
+    global _memory_instance
+    if _memory_instance is None:
+        _memory_instance = Memory.from_config(config)
+    return _memory_instance
 
 def chat_with_memories(message: str, user_id: str = "default_user") -> str:
     # Retrieve relevant memories
+    mem = get_memory()
     print(list_models)
     #chosen_model = "llama3.1:8b"
     chosen_model = orchestrator.choose_model(message,list_models)
@@ -57,7 +67,7 @@ def chat_with_memories(message: str, user_id: str = "default_user") -> str:
     print(f"--- Modèle sélectionné par Jean-Heude : {chosen_model} ---")
 
     print('debut mémoire')
-    relevant_memories = memory.search(query=message, user_id=user_id, limit=3)
+    relevant_memories = mem.search(query=message, user_id=user_id, limit=3)
     print(relevant_memories)
     memories_str = ""
     if isinstance(relevant_memories, list):
@@ -85,7 +95,7 @@ def chat_with_memories(message: str, user_id: str = "default_user") -> str:
         conversation = [
             {"role": "user", "content": message},
             {"role": "assistant", "content": assistant_response}]
-        memory.add(conversation, user_id=user_id)
+        mem.add(conversation, user_id=user_id)
 
         return assistant_response
     except Exception as e :
