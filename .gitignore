@@ -29,4 +29,4 @@ vite.config.ts.timestamp-*
 # Memory
 
 **/memoire.db
-qdrant_storage/
+**/qdrant_storage/
