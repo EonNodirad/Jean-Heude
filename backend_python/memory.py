@@ -44,20 +44,23 @@ config = {
 #initit
 
 
-list_models =orchestrator.get_local_models()
-_memory_instance = None
 
+_memory_instance = None
+_list_models = None
 
 def get_memory():
     """Initialise la mémoire seulement au premier appel"""
     global _memory_instance
+    global _list_models
     if _memory_instance is None:
         _memory_instance = Memory.from_config(config)
-    return _memory_instance
+    if _list_models is None:
+        _list_models =orchestrator.get_local_models()
+    return _memory_instance, _list_models
 
 def chat_with_memories(message: str, user_id: str = "default_user") -> str:
     # Retrieve relevant memories
-    mem = get_memory()
+    mem, list_models = get_memory()
     print(list_models)
     #chosen_model = "llama3.1:8b"
     chosen_model = orchestrator.choose_model(message,list_models)
