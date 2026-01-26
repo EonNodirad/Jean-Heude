@@ -1,0 +1,154 @@
+{
+  ".svelte-kit/generated/server/internal.js": {
+    "file": "internal.js",
+    "name": "internal",
+    "src": ".svelte-kit/generated/server/internal.js",
+    "isEntry": true,
+    "imports": [
+      "_internal.js",
+      "_environment.js"
+    ]
+  },
+  "_context.js": {
+    "file": "chunks/context.js",
+    "name": "context"
+  },
+  "_environment.js": {
+    "file": "chunks/environment.js",
+    "name": "environment"
+  },
+  "_equality.js": {
+    "file": "chunks/equality.js",
+    "name": "equality"
+  },
+  "_exports.js": {
+    "file": "chunks/exports.js",
+    "name": "exports",
+    "imports": [
+      "_equality.js"
+    ]
+  },
+  "_index.js": {
+    "file": "chunks/index.js",
+    "name": "index",
+    "imports": [
+      "_context.js",
+      "_utils2.js"
+    ]
+  },
+  "_internal.js": {
+    "file": "chunks/internal.js",
+    "name": "internal",
+    "imports": [
+      "_index.js",
+      "_environment.js",
+      "_equality.js",
+      "_context.js"
+    ]
+  },
+  "_public.js": {
+    "file": "chunks/public.js",
+    "name": "public"
+  },
+  "_shared.js": {
+    "file": "chunks/shared.js",
+    "name": "shared",
+    "imports": [
+      "_utils.js",
+      "_utils2.js"
+    ]
+  },
+  "_utils.js": {
+    "file": "chunks/utils.js",
+    "name": "utils"
+  },
+  "_utils2.js": {
+    "file": "chunks/utils2.js",
+    "name": "utils"
+  },
+  "node_modules/.pnpm/@sveltejs+kit@2.49.5_@svelt_f7518b72ec4f1e58fde8144664c4a44d/node_modules/@sveltejs/kit/src/runtime/app/server/remote/index.js": {
+    "file": "remote-entry.js",
+    "name": "remote-entry",
+    "src": "node_modules/.pnpm/@sveltejs+kit@2.49.5_@svelt_f7518b72ec4f1e58fde8144664c4a44d/node_modules/@sveltejs/kit/src/runtime/app/server/remote/index.js",
+    "isEntry": true,
+    "imports": [
+      "_shared.js",
+      "_environment.js"
+    ]
+  },
+  "node_modules/.pnpm/@sveltejs+kit@2.49.5_@svelt_f7518b72ec4f1e58fde8144664c4a44d/node_modules/@sveltejs/kit/src/runtime/components/svelte-5/error.svelte": {
+    "file": "entries/fallbacks/error.svelte.js",
+    "name": "entries/fallbacks/error.svelte",
+    "src": "node_modules/.pnpm/@sveltejs+kit@2.49.5_@svelt_f7518b72ec4f1e58fde8144664c4a44d/node_modules/@sveltejs/kit/src/runtime/components/svelte-5/error.svelte",
+    "isEntry": true,
+    "imports": [
+      "_context.js",
+      "_equality.js",
+      "_exports.js",
+      "_utils.js"
+    ]
+  },
+  "node_modules/.pnpm/@sveltejs+kit@2.49.5_@svelt_f7518b72ec4f1e58fde8144664c4a44d/node_modules/@sveltejs/kit/src/runtime/server/index.js": {
+    "file": "index.js",
+    "name": "index",
+    "src": "node_modules/.pnpm/@sveltejs+kit@2.49.5_@svelt_f7518b72ec4f1e58fde8144664c4a44d/node_modules/@sveltejs/kit/src/runtime/server/index.js",
+    "isEntry": true,
+    "imports": [
+      "_environment.js",
+      "_shared.js",
+      "_index.js",
+      "_exports.js",
+      "_utils.js",
+      "_internal.js"
+    ]
+  },
+  "src/routes/+layout.svelte": {
+    "file": "entries/pages/_layout.svelte.js",
+    "name": "entries/pages/_layout.svelte",
+    "src": "src/routes/+layout.svelte",
+    "isEntry": true,
+    "imports": [
+      "_index.js"
+    ]
+  },
+  "src/routes/+page.svelte": {
+    "file": "entries/pages/_page.svelte.js",
+    "name": "entries/pages/_page.svelte",
+    "src": "src/routes/+page.svelte",
+    "isEntry": true,
+    "imports": [
+      "_index.js",
+      "_context.js"
+    ],
+    "css": [
+      "_app/immutable/assets/_page.DVpLK34t.css"
+    ]
+  },
+  "src/routes/api/chat/+server.ts": {
+    "file": "entries/endpoints/api/chat/_server.ts.js",
+    "name": "entries/endpoints/api/chat/_server.ts",
+    "src": "src/routes/api/chat/+server.ts",
+    "isEntry": true,
+    "imports": [
+      "_public.js"
+    ]
+  },
+  "src/routes/api/historique/+server.ts": {
+    "file": "entries/endpoints/api/historique/_server.ts.js",
+    "name": "entries/endpoints/api/historique/_server.ts",
+    "src": "src/routes/api/historique/+server.ts",
+    "isEntry": true,
+    "imports": [
+      "_public.js"
+    ]
+  },
+  "src/routes/api/historique/[id]/+server.ts": {
+    "file": "entries/endpoints/api/historique/_id_/_server.ts.js",
+    "name": "entries/endpoints/api/historique/_id_/_server.ts",
+    "src": "src/routes/api/historique/[id]/+server.ts",
+    "isEntry": true,
+    "imports": [
+      "_public.js"
+    ]
+  }
+}
