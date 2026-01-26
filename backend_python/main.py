@@ -12,7 +12,7 @@ class ChatInput(BaseModel):
     content : str
     session_id: int | None
 
-connection = sqlite3.connect("/memory/memoire.db")
+connection = sqlite3.connect("memory/memoire.db")
 cursor = connection.cursor()
 
 cursor.execute("CREATE TABLE IF NOT EXISTS memory_chat (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT, timestamp TIMESTAMP, sessionID INTEGER)")

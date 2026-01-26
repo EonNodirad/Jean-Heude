@@ -35,7 +35,7 @@ config = {
     "vector_store": {
         "provider":"qdrant",
         "config":{
-            "host": "localhost",
+            "host": "qdrant",
             "port": 6333,
             "embedding_model_dims": 768
         }
