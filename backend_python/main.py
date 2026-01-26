@@ -2,9 +2,12 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 import sqlite3
-
+import os
 import memory
 
+# Au début de main.py
+if not os.path.exists("memory"):
+    os.makedirs("memory")
 
 app = FastAPI()
 
@@ -12,18 +15,18 @@ class ChatInput(BaseModel):
     content : str
     session_id: int | None
 
-connection = sqlite3.connect("memory/memoire.db")
-cursor = connection.cursor()
+connection = sqlite3.connect("memory/memoire.db", check_same_thread=False)
+cursorstart = connection.cursor()
 
-cursor.execute("CREATE TABLE IF NOT EXISTS memory_chat (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT, timestamp TIMESTAMP, sessionID INTEGER)")
-cursor.execute("CREATE TABLE IF NOT EXISTS historique_chat (id INTEGER PRIMARY KEY AUTOINCREMENT,timestamp TIMESTAMP,resume TEXT,userID TEXT)")
+cursorstart.execute("CREATE TABLE IF NOT EXISTS memory_chat (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT, timestamp TIMESTAMP, sessionID INTEGER)")
+cursorstart.execute("CREATE TABLE IF NOT EXISTS historique_chat (id INTEGER PRIMARY KEY AUTOINCREMENT,timestamp TIMESTAMP,resume TEXT,userID TEXT)")
 # chaque discussion relié à un user ID et dans chaque discussion il y a ses message d'enregistrer sessionID = id de historique
 
 
 @app.post("/chat")
 #appele l'IA
 async def chat_endpoint(input_data : ChatInput):
-
+    cursor = connection.cursor()
     session_id = input_data.session_id
     print(session_id)
     if session_id is None:
@@ -53,12 +56,14 @@ async def chat_endpoint(input_data : ChatInput):
     return { "response": response,"session_id":session_id}
 @app.get("/history")
 async def get_historique_list():
+    cursor = connection.cursor()
     cursor.execute("SELECT id,resume,timestamp FROM historique_chat ORDER BY timestamp DESC")
     lignes = cursor.fetchall()
     return [{"id":ligne[0],"resume":ligne[1], "timestamp":ligne[2]} for ligne in lignes]
 
 @app.get("/history/{session_id}")
 async def get_history(session_id: int) :
+    cursor = connection.cursor()
     cursor.execute("SELECT role,content FROM memory_chat WHERE sessionID = ? ORDER BY timestamp ASC ",(session_id,))
     print(session_id)
     message = cursor.fetchall()
