@@ -2,9 +2,6 @@ import pytest
 from unittest.mock import patch, MagicMock
 import memory  # Ton fichier
 
-import pytest
-from unittest.mock import patch, MagicMock
-import memory  # On importe le module
 
 @pytest.fixture
 def mock_services():
