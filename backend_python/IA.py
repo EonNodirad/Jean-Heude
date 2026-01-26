@@ -36,11 +36,12 @@ class Orchestrator :
         return [m['model'] for m in model_info['models']]
     
     def choose_model(self, user_prompt, available_models):
-
-
+        models = available_models
+        if not available_models:
+            models = "phi3:mini"
         dispatch_prompt = f"""
         You are Jean-Heude's orchestrator. 
-        Model installed on the PC: {available_models} 
+        Model installed on the PC: {models} 
         User question: "{user_prompt}"
         Among the installed models, which one is the most suitable to answer ? 
         Respond ONLY with the exact name of the model, nothing else. 
