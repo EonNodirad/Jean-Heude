@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 remote_host = os.getenv("URL_SERVER_OLLAMA")
+url_qdrant = os.getenv("URL_QDRANT")
 
 orchestrator = Orchestrator()
 client = Client(host=remote_host)
@@ -35,7 +36,7 @@ config = {
     "vector_store": {
         "provider":"qdrant",
         "config":{
-            "host": "URL_QDRANT",
+            "host": url_qdrant,
             "port": 6333,
             "embedding_model_dims": 768
         }
