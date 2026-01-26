@@ -12,11 +12,11 @@ def mock_services():
         
         # 1. On crée un objet simulé pour la classe Memory de mem0
         mock_mem_instance = MagicMock()
+        mock_list_models = ["phi3:mini", "llama3.1:8b"]
         # On force get_memory() à renvoyer cet objet simulé
-        mock_get_memory.return_value = mock_mem_instance
+        mock_get_memory.return_value = (mock_mem_instance, mock_list_models)
         
         # 2. Simulation de l'orchestrateur (évite le crash list index out of range)
-        mock_orch.get_local_models.return_value = ["phi3:mini", "llama3.1:8b"]
         mock_orch.choose_model.return_value = "phi3:mini"
         
         yield {
