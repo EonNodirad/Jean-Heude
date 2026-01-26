@@ -1,0 +1,1 @@
+{"version":3,"file":"public-DHts6zr1.js","sources":["../../../.svelte-kit/adapter-node/chunks/public.js"],"sourcesContent":["const PUBLIC_URL_SERVEUR_PYTHON = \"http://localhost:8000\";\nexport {\n  PUBLIC_URL_SERVEUR_PYTHON as P\n};\n"],"names":[],"mappings":"AAAK,MAAC,yBAAyB,GAAG;;;;"}

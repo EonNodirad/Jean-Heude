@@ -1,6 +1,6 @@
 
 import os
-
+from IA import Orchestrator
 from mem0 import Memory 
 
 from ollama import Client
@@ -9,11 +9,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 remote_host = os.getenv("URL_SERVER_OLLAMA")
-appelle_IA = os.getenv("APPELLE_SERVER_OLLAMA")
 
+orchestrator = Orchestrator()
 client = Client(host=remote_host)
 
-model = "llama3.1:8b"
+model = "phi3:mini"
 
 config = {
     "llm": {
@@ -44,12 +44,21 @@ config = {
 #initit
 memory =Memory.from_config(config)
 
+list_models =orchestrator.get_local_models()
 
 def chat_with_memories(message: str, user_id: str = "default_user") -> str:
     # Retrieve relevant memories
-    relevant_memories = memory.search(query=message, user_id=user_id, limit=3)
-    
+    print(list_models)
+    #chosen_model = "llama3.1:8b"
+    chosen_model = orchestrator.choose_model(message,list_models)
+    print(chosen_model)
+    if "embed" in chosen_model:
+        chosen_model = "llama3.1:8b"
+    print(f"--- Modèle sélectionné par Jean-Heude : {chosen_model} ---")
 
+    print('debut mémoire')
+    relevant_memories = memory.search(query=message, user_id=user_id, limit=3)
+    print(relevant_memories)
     memories_str = ""
     if isinstance(relevant_memories, list):
         # Si c'est une liste, on boucle directement dedans
@@ -59,16 +68,16 @@ def chat_with_memories(message: str, user_id: str = "default_user") -> str:
         memories_str = "\n".join([f"- {m['memory']}" for m in relevant_memories["results"]])
 
 
-    system_prompt = f"Tu es Jean-Heude un assistant personnelle. Ton but est d'être franc et réaliste pour donner la meilleure réponse possible même si c'est contre le miens. Tu réponds en format Markdown en te basant sur les requête et ta mémoire.\nUser Memories:\n{memories_str}"
+    system_prompt = f"Tu es Jean-Heude, un assistant personnel. Ton but est d'être franc et réaliste pour donner la meilleure réponse possible, même si cela va à l'encontre de mon opinion.Tu réponds en format Markdown en te basant sur les requête et ta mémoire.\nUser Memories:\n{memories_str}"
 
     
     messages = [{"role": "system", "content": system_prompt},
             {"role": "user", "content": message}]
-
+    print()
     # conversation
     try :
-        #response = requests.post(appelle_IA, json= payload)
-        response =  client.chat(model="llama3.1:8b", stream=False,messages=messages)
+
+        response =  client.chat(model=chosen_model, stream=False,messages=messages)
         assistant_response = response.model_dump()['message']['content']
 
 
