@@ -3,7 +3,7 @@
 	import nouvelleDiscussion from '$lib/assets/nouvelle-discussion.svg';
 	import { formatMessage } from '$lib/format';
 	import 'highlight.js/styles/github-dark.css';
-
+	import { fly } from 'svelte/transition';
 	let messages = $state([
 		{ role: 'assistant', content: 'Salut ! je suis ton assistant J.E.A.N-H.E.U.D.E' }
 	]);
@@ -12,7 +12,11 @@
 		id: number;
 		resume: string;
 	}
+
 	let historiques = $state<Historique[]>([]);
+
+	let modelChoisi = $state('');
+	let voirModel = $state(false);
 
 	let currentMessage = $state('');
 	let attente = $state(false);
@@ -30,11 +34,35 @@
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ content: currentMessage, session_id: sessionActive })
 		});
-		let result = await reponse.json();
-		if (!sessionActive && result.session_id) {
-			sessionActive = result.session_id;
+		const session_id = reponse.headers.get('x-session-id');
+		const model_chosen = reponse.headers.get('x-chosen-model');
+
+		if (model_chosen) {
+			modelChoisi = model_chosen;
+			voirModel = true;
+
+			setTimeout(() => {
+				voirModel = false;
+			}, 4000);
 		}
-		messages = [{ role: 'assistant', content: result.reply }, ...messages];
+
+		if (session_id) sessionActive = parseInt(session_id);
+
+		const decoder = new TextDecoder();
+		const reader = reponse.body?.getReader();
+
+		messages = [{ role: 'assistant', content: '' }, ...messages];
+		while (true) {
+			const result = await reader?.read();
+			if (!result || result.done) break;
+
+			const rep = decoder.decode(result.value, { stream: true });
+
+			messages[0].content += rep;
+
+			messages = messages;
+		}
+
 		currentMessage = '';
 		attente = false;
 		await rafraichirSession();
@@ -106,6 +134,13 @@
 			>
 		</form>
 	</div>
+	{#if voirModel}
+		<div transition:fly={{ y: 20, duration: 400 }} class="model_choisi">
+			<span class="text-choisi"
+				>Meilleur modèle pour votre requête : <strong>{modelChoisi}</strong></span
+			>
+		</div>
+	{/if}
 </div>
 
 <style>
@@ -300,5 +335,24 @@
 	/* Effet quand on clique */
 	.new-chat:active {
 		transform: scale(0.95);
+	}
+
+	.model_choisi {
+		position: fixed;
+		bottom: 100px; /* Ajuste selon la position de ta barre de message */
+		left: 50%;
+		transform: translateX(-50%);
+		background: #1e293b; /* Ardoise foncé */
+		color: #f8fafc;
+		padding: 10px 20px;
+		border-radius: 9999px;
+		border: 1px solid #38bdf8; /* Bordure cyan */
+		box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		z-index: 50;
+		font-family: sans-serif;
+		font-size: 0.9rem;
 	}
 </style>
