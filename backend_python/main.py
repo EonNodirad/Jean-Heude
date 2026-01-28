@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-
+from fastapi.responses import StreamingResponse
 import sqlite3
 import os
 import memory
@@ -37,23 +37,36 @@ async def chat_endpoint(input_data : ChatInput):
         connection.commit()
         session_id = cursor.lastrowid
         print(f"Nouvelle session créée : ID {session_id}")
-    # Jean-heude réfléchit
-    response =memory.chat_with_memories(input_data.content)
-    print(f"message reçu de Sveltekit : {input_data.content}")
-    
+
+
     cursor.execute(
             "INSERT INTO memory_chat (role, content, timestamp, sessionID) VALUES (?, ?, datetime('now'), ?)",
             ("user", input_data.content, session_id)
-        )
+     )
     connection.commit()
-    print("sauvegard ", input_data.content)
-    cursor.execute(
+    # selection model
+    chosen_model = memory.decide_model(input_data.content)
+    # Jean-heude réfléchit
+    async def generate():
+        full_text =""
+        for chunk in memory.chat_with_memories(input_data.content, chosen_model):
+            full_text += chunk
+            yield chunk
+
+            # sauvegarde dans historique
+        cursor = connection.cursor()
+
+        print("sauvegard ", input_data.content)
+        cursor.execute(
             "INSERT INTO memory_chat (role, content, timestamp, sessionID) VALUES (?, ?, datetime('now'), ?)",
-            ("assistant", response, session_id)
-        )
-    connection.commit()
-    print("sauvegarde ", response)
-    return { "response": response,"session_id":session_id}
+            ("assistant", full_text, session_id)
+         )
+        connection.commit()
+        print("sauvegarde ", full_text)
+
+    return StreamingResponse(generate(), media_type="text/plain", headers={"X-Session-Id": str(session_id), "X-Chosen-Model": chosen_model})
+
+
 @app.get("/history")
 async def get_historique_list():
     cursor = connection.cursor()

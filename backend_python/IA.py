@@ -9,7 +9,7 @@ remote_host = os.getenv("URL_SERVER_OLLAMA")
 client = Client(host=remote_host)
 
 system_message = 'You are a helpful assistant name Jean-Heude'
-model_used = 'Prodoc/intent-classification-1b'
+model_used = 'phi3:mini'
 def create_message(message,role):
     return {
         'role' : role,
@@ -38,12 +38,13 @@ class Orchestrator :
     def choose_model(self, user_prompt, available_models):
         models = available_models
         if not available_models:
-            models = "phi3:mini"
+            models = "llama3.1:8b"
         dispatch_prompt = f"""
         You are Jean-Heude's orchestrator. 
         Model installed on the PC: {models} 
         User question: "{user_prompt}"
         Among the installed models, which one is the most suitable to answer ? 
+        You need to choose a model that superior or equal to 7b of paramaters
         Respond ONLY with the exact name of the model, nothing else. 
         """
 
