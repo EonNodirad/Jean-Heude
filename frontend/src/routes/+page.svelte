@@ -1,9 +1,11 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import nouvelleDiscussion from '$lib/assets/nouvelle-discussion.svg';
+	import reglage from '$lib/assets/reglage.png';
 	import { formatMessage } from '$lib/format';
 	import 'highlight.js/styles/github-dark.css';
 	import { fly } from 'svelte/transition';
+	import trois_points from '$lib/assets/trois-points.png';
 	let messages = $state([
 		{ role: 'assistant', content: 'Salut ! je suis ton assistant J.E.A.N-H.E.U.D.E' }
 	]);
@@ -100,15 +102,25 @@
 <div class="container-global">
 	<div class="historique-windows">
 		<h2 class="historique-titre">Historique des conversations</h2>
-		{#each historiques as historique (historique.id)}
-			<button
-				class="message-historique"
-				class:active={sessionActive === historique.id}
-				onclick={() => ChargerConversation(historique.id)}
-			>
-				{historique.resume}
-			</button>
-		{/each}
+
+		<div class="liste-scrollable">
+			{#each historiques as historique (historique.id)}
+				<div class="historique-message">
+					<button
+						class="message-historique"
+						class:active={sessionActive === historique.id}
+						onclick={() => ChargerConversation(historique.id)}
+					>
+						{historique.resume}
+					</button>
+					<button class="trois-point"><img src={trois_points} aria-hidden="true" alt="" /></button>
+				</div>
+			{/each}
+		</div>
+
+		<div class="bas-historique">
+			<button class="reglage"><img src={reglage} aria-hidden="true" alt="" /></button>
+		</div>
 	</div>
 	<div class="chat-box">
 		<div class="chat-widows">
@@ -165,13 +177,18 @@
 		width: 80%;
 	}
 	.historique-windows {
-		height: 100%;
+		height: 100vh;
 		width: 20%;
 		background-color: #111827;
-		display: inline-block;
 
-		overflow-y: auto;
 		color: #f3f4f6;
+		display: flex;
+		flex-direction: column;
+	}
+	.liste-scrollable {
+		flex: 1; /* Prend tout l'espace disponible */
+		overflow-y: auto; /* Active le scroll ici seulement */
+		width: 100%;
 	}
 
 	.historique-titre {
@@ -180,24 +197,68 @@
 	}
 	.message-historique {
 		all: unset;
-		overflow-x: hidden;
-		display: block;
-		width: 100vw;
-		padding: 4% 5% 4% 5%;
-		font-size: 25px;
+		display: flex;
+		width: 100%; /* Passe à 100% pour que le clic fonctionne partout */
+		padding: 10px 15px;
+		font-size: 18px; /* 25px était peut-être un peu grand */
 		cursor: pointer;
+		/* Supprime overflow-x et overflow-y ici */
 	}
-	.message-historique:hover {
+
+	.historique-message:hover {
 		overflow-x: hidden;
 
-		transform: scale(1.02);
 		background-color: #1a2238;
 		border-radius: 7px;
-		margin-left: 5%;
-		margin-right: 5%;
+
 		box-shadow:
 			0 0 10px rgba(255, 154, 139, 0.4),
 			0 0 20px rgba(255, 154, 139, 0.2);
+	}
+	.historique-message {
+		display: flex;
+		overflow-x: hidden;
+	}
+	.historique-message:hover .trois-point {
+		opacity: 1; /* Devient visible au survol */
+	}
+	.trois-point {
+		all: unset;
+		opacity: 0;
+	}
+	.trois-point:hover {
+		transform: scale(1.2);
+	}
+	.trois-point img {
+		width: 20px;
+		height: 20px;
+		/* Si ton SVG est noir, ceci peut le rendre blanc/clair */
+		filter: invert(1);
+	}
+	.reglage {
+		all: unset;
+		cursor: pointer;
+		display: flex;
+		margin: 0; /* On retire les margin auto ici */
+	}
+
+	.reglage img {
+		width: 30px;
+		height: 30px;
+
+		filter: invert(1);
+	}
+	.reglage:hover {
+		transform: scale(1.3);
+	}
+	.bas-historique {
+		display: flex;
+		align-items: center; /* Centre l'icône verticalement */
+		justify-content: flex-end; /* Colle l'icône à droite */
+		width: 100%;
+		height: 60px; /* Utilise une hauteur fixe plutôt que 10% */
+		padding: 0 15px;
+		background-color: #111827;
 	}
 	.chat-widows {
 		padding: 12px;
@@ -287,7 +348,7 @@
 		align-items: center;
 		justify-content: center;
 		margin: 0 auto;
-		width: 100%;
+		width: 90%;
 		color: #f3f4f6;
 	}
 	.chat {
