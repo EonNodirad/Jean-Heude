@@ -1,84 +1,79 @@
 import pytest
 from unittest.mock import patch, MagicMock
-import memory  # Ton fichier
-
+import memory 
 
 @pytest.fixture
 def mock_services():
-    """Fixture pour simuler les composants externes et la mémoire vive"""
+    """Fixture pour simuler mem0, Ollama et l'orchestrateur"""
     with patch('memory.get_memory') as mock_get_memory, \
          patch('memory.client') as mock_ollama, \
          patch('memory.orchestrator') as mock_orch:
         
-        # 1. On crée un objet simulé pour la classe Memory de mem0
+        # 1. Mock de l'instance de mémoire (mem0)
         mock_mem_instance = MagicMock()
-        mock_list_models = ["phi3:mini", "llama3.1:8b"]
-        # On force get_memory() à renvoyer cet objet simulé
-        mock_get_memory.return_value = (mock_mem_instance, mock_list_models)
-        
-        # 2. Simulation de l'orchestrateur (évite le crash list index out of range)
-        mock_orch.choose_model.return_value = "phi3:mini"
+        mock_get_memory.return_value = mock_mem_instance
         
         yield {
             "ollama": mock_ollama,
-            "memory": mock_mem_instance, # C'est notre instance simulée
+            "memory": mock_mem_instance,
             "orchestrator": mock_orch
         }
 
-def test_chat_with_list_memories(mock_services):
-    """Test le cas où mem0 renvoie une LISTE"""
-    # 1. Configurer la mémoire simulée (format liste)
-    mock_services["memory"].search.return_value = [
-        {"memory": "Jean-Heude est un robot"}
-    ]
+def test_decide_model_logic(mock_services):
+    """Vérifie que decide_model choisit bien le modèle et gère le fallback"""
+    # Configuration du mock orchestrateur
+    mock_services["orchestrator"].get_local_models.return_value = ["phi3:mini", "llama3.1:8b"]
     
-    # 2. Configurer la réponse de l'IA (Ollama)
-    mock_response = MagicMock()
-    # On simule la structure de l'objet renvoyé par le client Ollama
-    mock_response.model_dump.return_value = {
-        'message': {'content': "Je suis un robot."}
-    }
-    mock_services["ollama"].chat.return_value = mock_response
+    # Cas 1 : Choix normal
+    mock_services["orchestrator"].choose_model.return_value = "phi3:mini"
+    assert memory.decide_model("Salut") == "phi3:mini"
+    
+    # Cas 2 : Fallback si 'embed' est renvoyé
+    mock_services["orchestrator"].choose_model.return_value = "nomic-embed-text"
+    assert memory.decide_model("Cherche un truc") == "llama3.1:8b"
 
-    # Action
-    reponse = memory.chat_with_memories("Qui es-tu ?")
+def test_chat_with_list_memories(mock_services):
+    """Test le stream avec des mémoires au format LISTE"""
+    mock_services["memory"].search.return_value = [{"memory": "Jean-Heude est un robot"}]
+    
+    # Simulation du Stream Ollama
+    mock_services["ollama"].chat.return_value = [
+        {'message': {'content': "Je suis "}},
+        {'message': {'content': "un robot."}}
+    ]
 
-    # Vérifications
-    assert "Je suis un robot" in reponse
-    # On vérifie que la méthode search de NOTRE instance simulée a été appelée
+    # ACTION : Note l'ajout du 2ème argument "phi3:mini"
+    generator = memory.chat_with_memories("Qui es-tu ?", "phi3:mini")
+    reponse_complete = "".join(list(generator))
+
+    assert "Je suis un robot" in reponse_complete
     mock_services["memory"].search.assert_called_once()
-    # On vérifie qu'on a bien tenté d'ajouter la conversation en mémoire
     mock_services["memory"].add.assert_called_once()
 
 def test_chat_with_dict_memories(mock_services):
-    """Test le cas où mem0 renvoie un DICT (ton fameux elif)"""
-    # 1. Format Dictionnaire avec 'results'
+    """Test le stream avec des mémoires au format DICTIONNAIRE"""
     mock_services["memory"].search.return_value = {
         "results": [{"memory": "L'utilisateur aime le bleu"}]
     }
     
-    mock_response = MagicMock()
-    mock_response.model_dump.return_value = {
-        'message': {'content': "Tu aimes le bleu."}
-    }
-    mock_services["ollama"].chat.return_value = mock_response
-    mock_services["orchestrator"].choose_model.return_value = "phi3:mini"
+    mock_services["ollama"].chat.return_value = [
+        {'message': {'content': "Tu aimes "}},
+        {'message': {'content': "le bleu."}}
+    ]
 
-    reponse = memory.chat_with_memories("Quelle est ma couleur préférée ?")
+    # ACTION
+    generator = memory.chat_with_memories("Quelle est ma couleur ?", "llama3.1:8b")
+    reponse_complete = "".join(list(generator))
 
-    assert "bleu" in reponse
+    assert "bleu" in reponse_complete
 
-def test_chat_model_fallback(mock_services):
-    """Vérifie que si l'orchestrateur choisit un modèle 'embed', on bascule sur llama"""
+def test_chat_exception_handling(mock_services):
+    """Vérifie que les erreurs de connexion sont bien rattrapées (yield error)"""
     mock_services["memory"].search.return_value = []
-    mock_services["orchestrator"].choose_model.return_value = "nomic-embed-text"
-    
-    mock_response = MagicMock()
-    mock_response.model_dump.return_value = {'message': {'content': 'ok'}}
-    mock_services["ollama"].chat.return_value = mock_response
+    # On simule un crash d'Ollama
+    mock_services["ollama"].chat.side_effect = Exception("Ollama est hors ligne")
 
-    memory.chat_with_memories("test")
-    
-    # Vérifie que ollama.chat a été appelé avec llama3.1:8b à cause du fallback
-    args, kwargs = mock_services["ollama"].chat.call_args
-    assert kwargs['model'] == "llama3.1:8b"
+    generator = memory.chat_with_memories("Test", "phi3:mini")
+    reponse_complete = "".join(list(generator))
+
+    assert "Erreur de connexion à l'IA" in reponse_complete
