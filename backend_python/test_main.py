@@ -1,10 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch
-
-
-# Import de l'app après avoir configuré les mocks si nécessaire
-# Mais ici on va patcher memory.chat_with_memories
 from main import app, connection
 
 client = TestClient(app)
@@ -19,19 +15,30 @@ def setup_db():
     yield
 
 def test_chat_endpoint_new_session():
-    """Teste la création d'une nouvelle session via /chat"""
+    """Teste la création d'une nouvelle session via /chat en Streaming"""
     payload = {"content": "Salut Jean-Heude !", "session_id": None}
     
-    # On mock le retour de l'IA dans le module memory
-    with patch("memory.chat_with_memories", return_value="Bonjour Noé !") as mock_chat:
+    chunks = ["Bonjour ", "Noé !"]
+    fake_model= "llama3.1:8"
+    with patch("memory.decide_model", return_value=fake_model) as mock_decide, \
+         patch("memory.chat_with_memories", return_value=iter(chunks)) as mock_chat:
+        
         response = client.post("/chat", json=payload)
         
+        # 1. On vérifie le statut
         assert response.status_code == 200
-        data = response.json()
-        assert data["response"] == "Bonjour Noé !"
-        assert "session_id" in data
-        assert data["session_id"] is not None
-        mock_chat.assert_called_once_with("Salut Jean-Heude !")
+        
+        # 2. On vérifie le TEXTE assemblé
+        assert response.text == "Bonjour Noé !"
+        
+        # 3. On vérifie les HEADERS
+        assert response.headers["X-Session-Id"] is not None
+        assert response.headers["X-Chosen-Model"] == fake_model
+        
+        # 4. On vérifie que les mocks ont été appelés avec les bons arguments
+        mock_decide.assert_called_once_with("Salut Jean-Heude !")
+        # On vérifie que chat_with_memories a bien reçu le modèle choisi
+        mock_chat.assert_called_once_with("Salut Jean-Heude !", fake_model)
 
 def test_get_history_list():
     """Vérifie qu'on récupère bien la liste des sessions"""

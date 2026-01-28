@@ -14,6 +14,20 @@ export const POST: RequestHandler = async ({ request }) => {
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ content: content, session_id: session_id })
 	});
-	const reponseIA = await demande.json();
-	return json({ reply: reponseIA.response, session_id: reponseIA.session_id });
+	const session = demande.headers.get('x-session-id');
+	const model = demande.headers.get('x-chosen-model');
+	const nouvHeader = new Headers();
+	nouvHeader.set('Content-Type', 'text/plain');
+	if (session) {
+		nouvHeader.set('x-session-id', session);
+	}
+	if (model) {
+		nouvHeader.set('x-chosen-model', model);
+	}
+	const myOption = { status: demande.status, statusText: demande.statusText, headers: nouvHeader };
+	const response = new Response(demande.body, myOption);
+	if (!demande.ok) {
+		console.error(`[Serveur Python] Erreur ${demande.status}: ${demande.statusText}`);
+	}
+	return response;
 };
