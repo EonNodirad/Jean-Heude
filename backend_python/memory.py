@@ -62,7 +62,7 @@ def decide_model(message:str):
     if _list_models is None:
         raw_models =orchestrator.get_local_models()
         print  (_list_models)
-        blacklist = ["embed", "classification", "rerank","vision","mini"]
+        blacklist = ["embed", "classification", "rerank","vision","mini","llama"]
         _list_models =[
             m for m in raw_models
             if not any(word in m.lower()for word in blacklist)
@@ -90,13 +90,7 @@ async def chat_with_memories(message: str, chosen_model: str, user_id: str = "de
 
     system_prompt = (
     f"Tu es Jean-Heude, un assistant personnel franc et qui donne un avis objectif même si pas en accord avec l'utilisateur\n"
-    "CONSIGNES CRITIQUES :\n"
-    "1. Tu as des capacités TECHNIQUES réelles via des fonctions (tools).\n"
-    "2. Ne dis JAMAIS 'Je vais chercher' ou 'Je vais utiliser un outil'. FAIS-LE directement.\n"
-    "3. Si l'utilisateur demande une info en temps réel (météo, news, prix), tu DOIS déclencher un outil de recherche.\n"
-    "4. Tu as l'interdiction formelle d'inventer des faits ou des dates.\n"
-    "5.Avant chaque action, utilise 'sequential_thinking' pour planifier ta réponse.\n"
-    "6. Si tu ne trouves rien avec tes outils, réponds : 'Désolé, mes recherches n'ont rien donné.'\n"
+    "Tu répondra en format markdown"
     f"\nUser Memories:\n{memories_str}"
 )
     
@@ -104,55 +98,67 @@ async def chat_with_memories(message: str, chosen_model: str, user_id: str = "de
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": message}
     ]
-    
-    assistant_response = ""
-    max_itéraions = 5
+    assistant_response =""
+    total_assistant_content = ""
     # 2. Récupération des outils MCP dynamiques
     # On le fait à chaque appel pour être sûr d'avoir les outils à jour
     available_tools = await tools.get_all_tools()
     thinking_tool = [t for t in available_tools if t['function']['name'] == 'sequential_thinking']
     print(thinking_tool)
+
+    # -----------------------------------------------------------------------
     try:
-        response = await client.chat(model= chosen_model, messages=messages, tools = thinking_tool)
-        # 3. Premier appel : L'IA analyse si elle a besoin d'un outil
-        for i in range(max_itéraions):
-            response = await client.chat(
-            model=chosen_model,
+        while True:
+            stream = await client.chat(
+            model='qwen3:8b',
             messages=messages,
             tools=available_tools,
-        )
+            stream=True,
+            think = True
 
-        # 4. GESTION DES OUTILS (LOOP)
-            if response.get('message', {}).get('tool_calls'):
-            # On ajoute le message de l'assistant qui demande l'outil au contexte
-                messages.append(response['message'])
-            
-                for tool in response['message']['tool_calls']:
-                    tool_name = tool['function']['name']
-                    tool_args = tool['function']['arguments']
-                
-                    yield f"Jean-Heude utilise l'outil : {tool_name}*...\n\n"
-                
-                # Exécution de l'outil (via MCP ou Natif)
-                    result = await tools.call_tool_execution(tool_name, tool_args)
-                
-                # On ajoute la réponse de l'outil au contexte
-                    messages.append({
-                    "role": "tool",
-                    "content": str(result), # Toujours s'assurer que c'est du texte
-                    })
+            )
 
+            thinking = ''
+            content = ''
+            tool_calls = []
 
-        
-        # 6. RÉPONSE DIRECTE (Sans outil)
-            else:
-                stream = await client.chat(model=chosen_model, messages=messages, stream=True)
-                async for chunk in stream:
-                    content = chunk['message']['content']
-                    assistant_response += content
-                    yield content
+            done_thinking = False
+            # accumulate the partial fields
+            async for chunk in stream:
+                if chunk.message.thinking:
+                    thinking += chunk.message.thinking
+                    print(chunk.message.thinking, end='', flush=True)
+                    yield f"think {chunk.message.thinking}"
+                if chunk.message.content:
+                    if not done_thinking:
+                        done_thinking = True
+                        total_assistant_content += chunk.message.content
+                        yield chunk.message.content
+                        print('\n')
+                    content += chunk.message.content
+                    print(chunk.message.content, end='', flush=True)
+                if chunk.message.tool_calls:
+                    tool_calls.extend(chunk.message.tool_calls)
+                    print(chunk.message.tool_calls)
+
+  # append accumulated fields to the messages
+            if thinking or content or tool_calls:
+                messages.append({'role': 'assistant', 'thinking': thinking, 'content': content, 'tool_calls': tool_calls})
+
+            if not tool_calls:
                 break
-
+            for call in tool_calls:
+                yield f"\n*Jean-Heude utilise l'outil : {call.function.name}...*\n"
+                
+                # Exécution
+                result = await tools.call_tool_execution(call.function.name, call.function.arguments)
+                
+                # On ajoute le résultat au contexte pour le tour suivant
+                messages.append({
+                    'role': 'tool',
+                    'tool_name': call.function.name,
+                    'content': str(result)
+                })
         # 7. SAUVEGARDE EN MÉMOIRE
         if assistant_response.strip():
             conversation = [
