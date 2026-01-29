@@ -49,7 +49,7 @@ async def chat_endpoint(input_data : ChatInput):
     # Jean-heude réfléchit
     async def generate():
         full_text =""
-        for chunk in memory.chat_with_memories(input_data.content, chosen_model):
+        async for chunk in memory.chat_with_memories(input_data.content, chosen_model):
             full_text += chunk
             yield chunk
 

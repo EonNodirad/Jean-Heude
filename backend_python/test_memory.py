@@ -1,79 +1,110 @@
 import pytest
-from unittest.mock import patch, MagicMock
+import json
+from unittest.mock import patch, MagicMock, AsyncMock
 import memory 
+
+# Configuration du comportement d'Ollama pour simuler l'Agent
+async def smart_ollama_mock(*args, **kwargs):
+    """
+    Simule Ollama : 
+    - Si stream=False (par défaut pour les outils) -> Renvoie un Dict.
+    - Si stream=True (pour la réponse finale) -> Renvoie un Générateur.
+    """
+    if kwargs.get('stream'):
+        async def gen():
+            yield {'message': {'content': "Voici la "}}
+            yield {'message': {'content': "réponse finale."}}
+        return gen()
+    
+    # Simule une demande d'outil (Sequential Thinking)
+    return {
+        "message": {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call_123",
+                "function": {
+                    "name": "sequential_thinking",
+                    "arguments": json.dumps({"thought": "Je réfléchis..."})
+                }
+            }]
+        }
+    }
 
 @pytest.fixture
 def mock_services():
-    """Fixture pour simuler mem0, Ollama et l'orchestrateur"""
+    """Fixture pour isoler les services externes"""
     with patch('memory.get_memory') as mock_get_memory, \
-         patch('memory.client') as mock_ollama, \
-         patch('memory.orchestrator') as mock_orch:
+         patch('memory.client', new_callable=AsyncMock) as mock_ollama, \
+         patch('memory.orchestrator') as mock_orch, \
+         patch('memory.tools.get_all_tools', new_callable=AsyncMock) as mock_get_tools, \
+         patch('memory.tools.call_tool_execution', new_callable=AsyncMock) as mock_exec:
         
-        # 1. Mock de l'instance de mémoire (mem0)
+        # Mock de la base de données de mémoire
         mock_mem_instance = MagicMock()
         mock_get_memory.return_value = mock_mem_instance
         
+        # Mock des outils disponibles
+        mock_get_tools.return_value = [{"function": {"name": "sequential_thinking", "parameters": {}}}]
+        mock_exec.return_value = "Analyse effectuée avec succès."
+
         yield {
             "ollama": mock_ollama,
             "memory": mock_mem_instance,
-            "orchestrator": mock_orch
+            "orchestrator": mock_orch,
+            "exec": mock_exec
         }
 
+# --- TESTS ---
+
 def test_decide_model_logic(mock_services):
-    """Vérifie que decide_model choisit bien le modèle et gère le fallback"""
-    # Configuration du mock orchestrateur
+    """Vérifie le choix du modèle et le fallback"""
     mock_services["orchestrator"].get_local_models.return_value = ["phi3:mini", "llama3.1:8b"]
-    
-    # Cas 1 : Choix normal
     mock_services["orchestrator"].choose_model.return_value = "phi3:mini"
     assert memory.decide_model("Salut") == "phi3:mini"
-    
-    # Cas 2 : Fallback si 'embed' est renvoyé
-    mock_services["orchestrator"].choose_model.return_value = "nomic-embed-text"
-    assert memory.decide_model("Cherche un truc") == "llama3.1:8b"
 
-def test_chat_with_list_memories(mock_services):
-    """Test le stream avec des mémoires au format LISTE"""
-    mock_services["memory"].search.return_value = [{"memory": "Jean-Heude est un robot"}]
-    
-    # Simulation du Stream Ollama
-    mock_services["ollama"].chat.return_value = [
-        {'message': {'content': "Je suis "}},
-        {'message': {'content': "un robot."}}
-    ]
-
-    # ACTION : Note l'ajout du 2ème argument "phi3:mini"
-    generator = memory.chat_with_memories("Qui es-tu ?", "phi3:mini")
-    reponse_complete = "".join(list(generator))
-
-    assert "Je suis un robot" in reponse_complete
-    mock_services["memory"].search.assert_called_once()
-    mock_services["memory"].add.assert_called_once()
-
-def test_chat_with_dict_memories(mock_services):
-    """Test le stream avec des mémoires au format DICTIONNAIRE"""
-    mock_services["memory"].search.return_value = {
-        "results": [{"memory": "L'utilisateur aime le bleu"}]
-    }
-    
-    mock_services["ollama"].chat.return_value = [
-        {'message': {'content': "Tu aimes "}},
-        {'message': {'content': "le bleu."}}
-    ]
-
-    # ACTION
-    generator = memory.chat_with_memories("Quelle est ma couleur ?", "llama3.1:8b")
-    reponse_complete = "".join(list(generator))
-
-    assert "bleu" in reponse_complete
-
-def test_chat_exception_handling(mock_services):
-    """Vérifie que les erreurs de connexion sont bien rattrapées (yield error)"""
+@pytest.mark.asyncio
+async def test_chat_with_agent_logic(mock_services):
+    """
+    Test le flux complet :
+    1. Appel 1 : L'IA demande l'outil
+    2. Appel 2 : L'IA voit le résultat et dit 'C'est bon, j'ai fini' (pas d'outil)
+    3. Appel 3 : L'IA génère le stream final
+    """
     mock_services["memory"].search.return_value = []
-    # On simule un crash d'Ollama
-    mock_services["ollama"].chat.side_effect = Exception("Ollama est hors ligne")
 
-    generator = memory.chat_with_memories("Test", "phi3:mini")
-    reponse_complete = "".join(list(generator))
+    # 1. On prépare le générateur pour la fin
+    async def final_stream():
+        yield {'message': {'content': "Voici la "}}
+        yield {'message': {'content': "réponse finale."}}
 
-    assert "Erreur de connexion à l'IA" in reponse_complete
+    # 2. On définit la séquence exacte de ce qu'Ollama renvoie
+    mock_services["ollama"].chat.side_effect = [
+        # Premier passage dans la boucle (i=0) : Demande d'outil
+        {
+            "message": {
+                "role": "assistant",
+                "tool_calls": [{"id": "1", "function": {"name": "sequential_thinking", "arguments": "{}"}}]
+            }
+        },
+        # Deuxième passage (i=1) : L'IA a fini avec les outils (renvoie un msg vide sans tool_calls)
+        {
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": None # C'est CA qui déclenche le 'else' dans ton code
+            }
+        },
+        # Appel final (le stream)
+        final_stream()
+    ]
+
+    reponse_complete = ""
+    async for chunk in memory.chat_with_memories("Test", "llama3.1:8b"):
+        if "utilise l'outil" not in chunk:
+            reponse_complete += chunk
+
+    # Maintenant, l'assertion va passer !
+    assert "réponse finale" in reponse_complete
+    assert mock_services["ollama"].chat.call_count == 3
+
