@@ -17,6 +17,8 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "8000:8000"
+    volumes:
+      - ./backend_python/memory:/app/memory
 
   frontend:
     build: ./frontend
