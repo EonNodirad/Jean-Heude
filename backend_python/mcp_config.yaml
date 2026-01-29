@@ -1,0 +1,22 @@
+# Configuration des serveurs MCP pour Jean-Heude
+mcp_servers:
+  # Outil de gestion de fichiers
+  #filesystem:
+    #command: "npx"
+    #args: ["-y", "@modelcontextprotocol/server-filesystem", "/mcp-files"]
+  
+  # Exemple : Recherche Web 
+  duckduckgo:
+    command: "npx"
+    args: ["-y", "@oevortex/ddg_search@latest"]
+  sequential-thinking: {
+    command: "npx",
+    args: [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
+    }
+  # Tu peux ajouter tes propres scripts Python ici aussi
+  # mon-outil-perso:
+  #   command: "python"
+  #   args: ["mes_outils.py"]
