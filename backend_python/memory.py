@@ -127,16 +127,16 @@ async def chat_with_memories(message: str, chosen_model: str, user_id: str = "de
             async for chunk in stream:
                 if chunk.message.thinking:
                     thinking += chunk.message.thinking
-                    print(chunk.message.thinking, end='', flush=True)
-                    yield f"think {chunk.message.thinking}"
+                    yield f"think: {chunk.message.thinking}"
                 if chunk.message.content:
                     if not done_thinking:
                         done_thinking = True
-                        total_assistant_content += chunk.message.content
-                        yield chunk.message.content
-                        print('\n')
+                    total_assistant_content += chunk.message.content
+                    assistant_response+= chunk.message.content
+                    yield chunk.message.content
+                    print('\n')
                     content += chunk.message.content
-                    print(chunk.message.content, end='', flush=True)
+
                 if chunk.message.tool_calls:
                     tool_calls.extend(chunk.message.tool_calls)
                     print(chunk.message.tool_calls)
