@@ -91,6 +91,8 @@ async def chat_with_memories(message: str, chosen_model: str, user_id: str = "de
     system_prompt = (
     f"Tu es Jean-Heude, un assistant personnel franc et qui donne un avis objectif même si pas en accord avec l'utilisateur\n"
     "Tu répondra en format markdown"
+    "limite ta pensée au strict minimum. Ne boucle pas si un outil donne une "
+    "réponse claire. Sois efficace."
     f"\nUser Memories:\n{memories_str}"
 )
     
@@ -114,7 +116,7 @@ async def chat_with_memories(message: str, chosen_model: str, user_id: str = "de
             messages=messages,
             tools=available_tools,
             stream=True,
-            think = True
+            think = True,
 
             )
 
@@ -127,14 +129,13 @@ async def chat_with_memories(message: str, chosen_model: str, user_id: str = "de
             async for chunk in stream:
                 if chunk.message.thinking:
                     thinking += chunk.message.thinking
-                    yield f"think: {chunk.message.thinking}"
+                    yield f"¶{chunk.message.thinking}"
                 if chunk.message.content:
                     if not done_thinking:
                         done_thinking = True
                     total_assistant_content += chunk.message.content
                     assistant_response+= chunk.message.content
                     yield chunk.message.content
-                    print('\n')
                     content += chunk.message.content
 
                 if chunk.message.tool_calls:
@@ -149,10 +150,11 @@ async def chat_with_memories(message: str, chosen_model: str, user_id: str = "de
                 break
             for call in tool_calls:
                 yield f"\n*Jean-Heude utilise l'outil : {call.function.name}...*\n"
+                yield "\n"
                 
                 # Exécution
                 result = await tools.call_tool_execution(call.function.name, call.function.arguments)
-                
+
                 # On ajoute le résultat au contexte pour le tour suivant
                 messages.append({
                     'role': 'tool',
