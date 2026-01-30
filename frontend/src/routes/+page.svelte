@@ -6,8 +6,9 @@
 	import 'highlight.js/styles/github-dark.css';
 	import { fly } from 'svelte/transition';
 	import trois_points from '$lib/assets/trois-points.png';
+	import { handleStream } from '$lib/lecture_reponse';
 	let messages = $state([
-		{ role: 'assistant', content: 'Salut ! je suis ton assistant J.E.A.N-H.E.U.D.E' }
+		{ role: 'assistant', think: '', content: 'Salut ! je suis ton assistant J.E.A.N-H.E.U.D.E' }
 	]);
 	let sessionActive = $state<number | null>(null);
 	interface Historique {
@@ -29,13 +30,14 @@
 		e.preventDefault();
 		if (currentMessage.trim() === '') return;
 		attente = true;
-		messages = [{ role: 'user', content: currentMessage }, ...messages];
-
+		messages = [{ role: 'user', think: '', content: currentMessage }, ...messages];
+		messages = [{ role: 'assistant', think: '', content: '' }, ...messages];
 		let reponse = await fetch('/api/chat', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ content: currentMessage, session_id: sessionActive })
 		});
+
 		const session_id = reponse.headers.get('x-session-id');
 		const model_chosen = reponse.headers.get('x-chosen-model');
 
@@ -45,24 +47,15 @@
 
 			setTimeout(() => {
 				voirModel = false;
-			}, 4000);
+			}, 3000);
 		}
 
 		if (session_id) sessionActive = parseInt(session_id);
 
-		const decoder = new TextDecoder();
 		const reader = reponse.body?.getReader();
 
-		messages = [{ role: 'assistant', content: '' }, ...messages];
-		while (true) {
-			const result = await reader?.read();
-			if (!result || result.done) break;
-
-			const rep = decoder.decode(result.value, { stream: true });
-
-			messages[0].content += rep;
-
-			messages = messages;
+		if (reader) {
+			await handleStream(reader, reponse.body);
 		}
 
 		currentMessage = '';
@@ -95,7 +88,9 @@
 
 	function nouveauChat() {
 		sessionActive = null;
-		messages = [{ role: 'assistant', content: "Nouvelle discussion ! Comment puis-je t'aider ?" }];
+		messages = [
+			{ role: 'assistant', think: '', content: "Nouvelle discussion ! Comment puis-je t'aider ?" }
+		];
 	}
 </script>
 
