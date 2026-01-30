@@ -65,8 +65,9 @@ async def get_all_tools():
 async def call_tool_execution(name, args):
     """Cherche quel serveur possède l'outil et l'exécute"""
     if name == "get_current_time":
-        return f"Il est {datetime.datetime.now().strftime('%H:%M:%S')}."
-
+        maintenant = datetime.datetime.now()
+        date_longue = maintenant.strftime('%A %d %B %Y, %H:%M:%S')
+        return f"Nous sommes le {date_longue}."
     config = load_mcp_config()
     for server_name, srv_config in config.get("mcp_servers", {}).items():
         params = StdioServerParameters(

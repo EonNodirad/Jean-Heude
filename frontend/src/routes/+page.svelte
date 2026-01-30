@@ -55,7 +55,10 @@
 		const reader = reponse.body?.getReader();
 
 		if (reader) {
-			await handleStream(reader, reponse.body);
+			await handleStream(reader, (think, content) => {
+				messages[0].think = think;
+				messages[0].content = content;
+			});
 		}
 
 		currentMessage = '';
@@ -120,11 +123,25 @@
 	<div class="chat-box">
 		<div class="chat-widows">
 			{#each messages as msg (msg)}
-				<div class={msg.role}>
-					<div class="message-content">
-						<!-- eslint-disable-next-line svelte/no-at-html-tags -->
-						{@html formatMessage(msg.content)}
-					</div>
+				<div class="message {msg.role}">
+					{#if msg.think}
+						<div class="thinking-container">
+							<details open>
+								<summary>Réflexion de Jean-Heude...</summary>
+								<div class="thinking-content">
+									{msg.think}
+								</div>
+							</details>
+						</div>
+					{/if}
+
+					{#if msg.content}
+						<div class="content-bubble">
+							{@html formatMessage(msg.content)}
+						</div>
+					{:else if msg.role === 'assistant'}
+						<span class="dot-typing">...</span>
+					{/if}
 				</div>
 			{/each}
 		</div>
@@ -151,6 +168,91 @@
 </div>
 
 <style>
+	/* Style pour les liens dans la bulle assistant (pour les news) */
+	:global(.assistant .content-bubble a) {
+		color: #1a2238;
+		text-decoration: underline;
+		font-weight: bold;
+	}
+
+	/* On s'assure que les paragraphes n'ont pas de marges inutiles */
+	:global(.content-bubble p) {
+		margin: 0 0 10px 0;
+	}
+	:global(.content-bubble p:last-child) {
+		margin-bottom: 0;
+	}
+	/* --- ANIMATION DE CHARGEMENT --- */
+	.dot-typing {
+		display: flex;
+		align-items: center;
+		font-weight: bold;
+		font-size: 18px; /* Un peu plus petit pour rester élégant */
+		color: #e7644f;
+		padding: 10px 20px;
+	}
+
+	/* Le texte fixe */
+	.dot-typing::before {
+		content: 'Jean-Heude réfléchit';
+	}
+
+	/* Les points animés */
+	.dot-typing::after {
+		content: '...';
+		display: inline-block;
+		vertical-align: bottom;
+		width: 0px; /* On commence à zéro */
+		overflow: hidden;
+		white-space: nowrap;
+		animation: typing-dots 1.5s steps(4, end) infinite;
+		margin-left: 2px;
+	}
+
+	@keyframes typing-dots {
+		from {
+			width: 0;
+		}
+		to {
+			width: 1.25em;
+		} /* La largeur de 3 points */
+	}
+	.thinking-container {
+		margin-bottom: 10px;
+		width: 100%;
+	}
+
+	.thinking-container details {
+		background-color: rgba(17, 24, 39, 0.8); /* Fond sombre transparent */
+		border: 1px solid rgba(231, 100, 79, 0.3); /* Bordure corail discrète */
+		border-radius: 15px;
+		padding: 10px;
+		color: #94a3b8;
+		font-family: 'Fira Code', monospace;
+		font-size: 0.85rem;
+	}
+
+	.thinking-container summary {
+		cursor: pointer;
+		font-weight: bold;
+		color: #e7644f; /* Ton corail */
+		outline: none;
+		list-style: none; /* Cache la flèche par défaut */
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	/* Petite icône avant le texte "Réflexion" */
+
+	.thinking-content {
+		margin-top: 10px;
+		padding-top: 10px;
+		border-top: 1px dashed rgba(231, 100, 79, 0.2);
+		font-style: italic;
+		line-height: 1.4;
+		white-space: pre-wrap;
+	}
 	:global(body) {
 		margin: 0;
 		padding: 0;
@@ -305,7 +407,7 @@
 		transform: scale(1.02); /* La bulle grossit légèrement au survol */
 		box-shadow: 0 0 15px rgba(255, 154, 139, 0.6);
 	}
-	:global(.message-content pre) {
+	:global(.message pre) {
 		background-color: #0d1117;
 		padding: 15px;
 		border-radius: 8px;
@@ -313,12 +415,12 @@
 		margin: 10px 0;
 		border: 1px solid #30363d;
 	}
-	:global(.message-content code) {
+	:global(.message code) {
 		font-family: 'Fira Code', 'Courier New', monospace;
 		font-size: 0.9em;
 		color: #e6edf3;
 	}
-	:global(.message-content :not(pre) > code) {
+	:global(.message :not(pre) > code) {
 		background-color: rgba(110, 118, 129, 0.4);
 		padding: 0.2em 0.4em;
 		border-radius: 6px;

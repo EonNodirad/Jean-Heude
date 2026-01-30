@@ -50,9 +50,13 @@ async def chat_endpoint(input_data : ChatInput):
     async def generate():
         full_text =""
         async for chunk in memory.chat_with_memories(input_data.content, chosen_model):
-            full_text += chunk
             yield chunk
-
+        
+            if "¶" in chunk:
+            # C'est de la pensée, on ne l'ajoute PAS à full_text
+            # On pourrait faire : current_thinking += chunk.replace("¶", "")
+                pass 
+            else: full_text += chunk
             # sauvegarde dans historique
         cursor = connection.cursor()
 
