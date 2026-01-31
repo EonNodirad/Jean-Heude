@@ -12,7 +12,7 @@ mcp_servers:
       - "-y"
       - "@modelcontextprotocol/server-brave-search"
     env:
-      BRAVE_API_KEY: "BSArWaguTD9qp_X_x-vUikE1BKOTaV3"
+      BRAVE_API_KEY: "${BRAVE_API_KEY}"
 
   wikipedia:
     command: "npx"

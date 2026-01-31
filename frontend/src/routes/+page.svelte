@@ -8,7 +8,12 @@
 	import trois_points from '$lib/assets/trois-points.png';
 	import { handleStream } from '$lib/lecture_reponse';
 	let messages = $state([
-		{ role: 'assistant', think: '', content: 'Salut ! je suis ton assistant J.E.A.N-H.E.U.D.E' }
+		{
+			role: 'assistant',
+			think: '',
+			content: 'Salut ! je suis ton assistant J.E.A.N-H.E.U.D.E',
+			status: ''
+		}
 	]);
 	let sessionActive = $state<number | null>(null);
 	interface Historique {
@@ -30,8 +35,11 @@
 		e.preventDefault();
 		if (currentMessage.trim() === '') return;
 		attente = true;
-		messages = [{ role: 'user', think: '', content: currentMessage }, ...messages];
-		messages = [{ role: 'assistant', think: '', content: '' }, ...messages];
+		messages = [{ role: 'user', think: '', content: currentMessage, status: '' }, ...messages];
+		messages = [
+			{ role: 'assistant', think: '', content: '', status: ' Je réfléchit ...' },
+			...messages
+		];
 		let reponse = await fetch('/api/chat', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -55,9 +63,10 @@
 		const reader = reponse.body?.getReader();
 
 		if (reader) {
-			await handleStream(reader, (think, content) => {
+			await handleStream(reader, (think, content, status) => {
 				messages[0].think = think;
 				messages[0].content = content;
+				messages[0].status = status;
 			});
 		}
 
@@ -92,7 +101,12 @@
 	function nouveauChat() {
 		sessionActive = null;
 		messages = [
-			{ role: 'assistant', think: '', content: "Nouvelle discussion ! Comment puis-je t'aider ?" }
+			{
+				role: 'assistant',
+				think: '',
+				content: "Nouvelle discussion ! Comment puis-je t'aider ?",
+				status: ''
+			}
 		];
 	}
 </script>
@@ -126,8 +140,13 @@
 				<div class="message {msg.role}">
 					{#if msg.think}
 						<div class="thinking-container">
-							<details open>
-								<summary>Réflexion de Jean-Heude...</summary>
+							<details open={!msg.content}>
+								<summary class="status-summary">
+									<div class="status-indicator">
+										{#if !msg.content}<span class="pulse-dot"></span>{/if}
+										{msg.status || 'Jean-Heude réfléchit...'}
+									</div>
+								</summary>
 								<div class="thinking-content">
 									{msg.think}
 								</div>
@@ -137,10 +156,13 @@
 
 					{#if msg.content}
 						<div class="content-bubble">
+							<!-- eslint-disable-next-line svelte/no-at-html-tags -->
 							{@html formatMessage(msg.content)}
 						</div>
-					{:else if msg.role === 'assistant'}
-						<span class="dot-typing">...</span>
+					{:else if msg.role === 'assistant' && !msg.think}
+						<div class="dot-typing-container">
+							<span class="dot-typing"></span>
+						</div>
 					{/if}
 				</div>
 			{/each}
@@ -182,76 +204,81 @@
 	:global(.content-bubble p:last-child) {
 		margin-bottom: 0;
 	}
-	/* --- ANIMATION DE CHARGEMENT --- */
-	.dot-typing {
-		display: flex;
-		align-items: center;
-		font-weight: bold;
-		font-size: 18px; /* Un peu plus petit pour rester élégant */
-		color: #e7644f;
-		padding: 10px 20px;
-	}
-
-	/* Le texte fixe */
-	.dot-typing::before {
-		content: 'Jean-Heude réfléchit';
-	}
-
-	/* Les points animés */
-	.dot-typing::after {
-		content: '...';
-		display: inline-block;
-		vertical-align: bottom;
-		width: 0px; /* On commence à zéro */
-		overflow: hidden;
-		white-space: nowrap;
-		animation: typing-dots 1.5s steps(4, end) infinite;
-		margin-left: 2px;
-	}
-
-	@keyframes typing-dots {
-		from {
-			width: 0;
-		}
-		to {
-			width: 1.25em;
-		} /* La largeur de 3 points */
-	}
+	/* --- RÉFLEXION VERSION AGENT --- */
 	.thinking-container {
-		margin-bottom: 10px;
+		margin-bottom: 15px;
 		width: 100%;
+		animation: slideIn 0.3s ease-out;
 	}
 
 	.thinking-container details {
-		background-color: rgba(17, 24, 39, 0.8); /* Fond sombre transparent */
-		border: 1px solid rgba(231, 100, 79, 0.3); /* Bordure corail discrète */
-		border-radius: 15px;
-		padding: 10px;
+		background-color: rgba(17, 24, 39, 0.6);
+		border: 1px solid rgba(231, 100, 79, 0.4);
+		border-radius: 12px;
+		padding: 5px; /* Plus compact */
 		color: #94a3b8;
 		font-family: 'Fira Code', monospace;
-		font-size: 0.85rem;
+		transition: all 0.3s ease;
 	}
 
+	/* Le bandeau de statut (Summary) */
 	.thinking-container summary {
 		cursor: pointer;
-		font-weight: bold;
-		color: #e7644f; /* Ton corail */
+		padding: 8px 12px;
 		outline: none;
-		list-style: none; /* Cache la flèche par défaut */
+		list-style: none;
 		display: flex;
 		align-items: center;
-		gap: 8px;
+		gap: 12px;
+		font-size: 0.85rem;
+		color: #e7644f;
 	}
 
-	/* Petite icône avant le texte "Réflexion" */
+	/* Le petit point qui pulse pendant la réflexion */
+	.pulse-dot {
+		width: 8px;
+		height: 8px;
+		background-color: #e7644f;
+		border-radius: 50%;
+		box-shadow: 0 0 8px rgba(231, 100, 79, 0.8);
+		animation: pulse-glow 1.5s infinite ease-in-out;
+		flex-shrink: 0;
+	}
 
+	@keyframes pulse-glow {
+		0%,
+		100% {
+			transform: scale(1);
+			opacity: 1;
+		}
+		50% {
+			transform: scale(1.4);
+			opacity: 0.5;
+		}
+	}
+
+	/* Contenu de la réflexion (Détails) */
 	.thinking-content {
-		margin-top: 10px;
-		padding-top: 10px;
+		margin-top: 5px;
+		padding: 10px 15px;
 		border-top: 1px dashed rgba(231, 100, 79, 0.2);
 		font-style: italic;
-		line-height: 1.4;
-		white-space: pre-wrap;
+		line-height: 1.5;
+		font-size: 0.8rem;
+		max-height: 200px; /* On limite pour éviter de casser le scroll */
+		overflow-y: auto;
+	}
+
+	/* Animation pour l'apparition des messages */
+	@keyframes slideIn {
+		from {
+			opacity: 0;
+			transform: translateY(10px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
 	}
 	:global(body) {
 		margin: 0;
