@@ -6,16 +6,19 @@ mcp_servers:
     #args: ["-y", "@modelcontextprotocol/server-filesystem", "/mcp-files"]
   
   # Exemple : Recherche Web 
-  duckduckgo:
+  brave-search:
     command: "npx"
-    args: ["-y", "@oevortex/ddg_search@latest"]
-  sequential-thinking: {
-    command: "npx",
-    args: [
-        "-y",
-        "@modelcontextprotocol/server-sequential-thinking"
-      ]
-    }
+    args: 
+      - "-y"
+      - "@modelcontextprotocol/server-brave-search"
+    env:
+      BRAVE_API_KEY: "${BRAVE_API_KEY}"
+
+  wikipedia:
+    command: "npx"
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-wikipedia"
   # Tu peux ajouter tes propres scripts Python ici aussi
   # mon-outil-perso:
   #   command: "python"
