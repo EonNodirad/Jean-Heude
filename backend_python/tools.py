@@ -1,18 +1,38 @@
 import yaml
 import datetime
 import os
+import re
 import sys
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from dotenv import load_dotenv
 
+load_dotenv()
 CONFIG_PATH = "mcp_config.yaml"
 
 def load_mcp_config():
     if not os.path.exists(CONFIG_PATH):
         return {"mcp_servers": {}}
     with open(CONFIG_PATH, "r") as f:
-        # On utilise safe_load pour la sécurité
-        return yaml.safe_load(f)
+        
+        content = f.read()
+        def replace_env_var(match):
+            var_name = match.group(1)
+            val = os.getenv(var_name)
+            
+            if val is None:
+                # On utilise sys.stderr pour ne pas polluer le flux JSON-RPC de MCP
+                print(f"⚠️ Attention : La variable {var_name} est absente du .env !", file=sys.stderr)
+                return f"MISSING_{var_name}"
+            
+            # 2. CORRECTION DU TYPO : group(0) au lieu de groupe(0)
+            return val
+        pattern = re.compile(r"\${(\w+)}")
+        fixed_content = pattern.sub(replace_env_var, content)
+        
+        # On parse le YAML final "nettoyé"
+        return yaml.safe_load(fixed_content)
+
 
 async def get_all_tools():
     """Charge dynamiquement TOUS les outils de TOUS les serveurs du YAML"""
