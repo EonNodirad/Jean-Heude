@@ -6,8 +6,14 @@
 	import 'highlight.js/styles/github-dark.css';
 	import { fly } from 'svelte/transition';
 	import trois_points from '$lib/assets/trois-points.png';
+	import { handleStream } from '$lib/lecture_reponse';
 	let messages = $state([
-		{ role: 'assistant', content: 'Salut ! je suis ton assistant J.E.A.N-H.E.U.D.E' }
+		{
+			role: 'assistant',
+			think: '',
+			content: 'Salut ! je suis ton assistant J.E.A.N-H.E.U.D.E',
+			status: ''
+		}
 	]);
 	let sessionActive = $state<number | null>(null);
 	interface Historique {
@@ -29,13 +35,17 @@
 		e.preventDefault();
 		if (currentMessage.trim() === '') return;
 		attente = true;
-		messages = [{ role: 'user', content: currentMessage }, ...messages];
-
+		messages = [{ role: 'user', think: '', content: currentMessage, status: '' }, ...messages];
+		messages = [
+			{ role: 'assistant', think: '', content: '', status: ' Je réfléchit ...' },
+			...messages
+		];
 		let reponse = await fetch('/api/chat', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ content: currentMessage, session_id: sessionActive })
 		});
+
 		const session_id = reponse.headers.get('x-session-id');
 		const model_chosen = reponse.headers.get('x-chosen-model');
 
@@ -45,24 +55,19 @@
 
 			setTimeout(() => {
 				voirModel = false;
-			}, 4000);
+			}, 3000);
 		}
 
 		if (session_id) sessionActive = parseInt(session_id);
 
-		const decoder = new TextDecoder();
 		const reader = reponse.body?.getReader();
 
-		messages = [{ role: 'assistant', content: '' }, ...messages];
-		while (true) {
-			const result = await reader?.read();
-			if (!result || result.done) break;
-
-			const rep = decoder.decode(result.value, { stream: true });
-
-			messages[0].content += rep;
-
-			messages = messages;
+		if (reader) {
+			await handleStream(reader, (think, content, status) => {
+				messages[0].think = think;
+				messages[0].content = content;
+				messages[0].status = status;
+			});
 		}
 
 		currentMessage = '';
@@ -95,7 +100,14 @@
 
 	function nouveauChat() {
 		sessionActive = null;
-		messages = [{ role: 'assistant', content: "Nouvelle discussion ! Comment puis-je t'aider ?" }];
+		messages = [
+			{
+				role: 'assistant',
+				think: '',
+				content: "Nouvelle discussion ! Comment puis-je t'aider ?",
+				status: ''
+			}
+		];
 	}
 </script>
 
@@ -125,11 +137,33 @@
 	<div class="chat-box">
 		<div class="chat-widows">
 			{#each messages as msg (msg)}
-				<div class={msg.role}>
-					<div class="message-content">
-						<!-- eslint-disable-next-line svelte/no-at-html-tags -->
-						{@html formatMessage(msg.content)}
-					</div>
+				<div class="message {msg.role}">
+					{#if msg.think}
+						<div class="thinking-container">
+							<details open={!msg.content}>
+								<summary class="status-summary">
+									<div class="status-indicator">
+										{#if !msg.content}<span class="pulse-dot"></span>{/if}
+										{msg.status || 'Jean-Heude réfléchit...'}
+									</div>
+								</summary>
+								<div class="thinking-content">
+									{msg.think}
+								</div>
+							</details>
+						</div>
+					{/if}
+
+					{#if msg.content}
+						<div class="content-bubble">
+							<!-- eslint-disable-next-line svelte/no-at-html-tags -->
+							{@html formatMessage(msg.content)}
+						</div>
+					{:else if msg.role === 'assistant' && !msg.think}
+						<div class="dot-typing-container">
+							<span class="dot-typing"></span>
+						</div>
+					{/if}
 				</div>
 			{/each}
 		</div>
@@ -156,6 +190,96 @@
 </div>
 
 <style>
+	/* Style pour les liens dans la bulle assistant (pour les news) */
+	:global(.assistant .content-bubble a) {
+		color: #1a2238;
+		text-decoration: underline;
+		font-weight: bold;
+	}
+
+	/* On s'assure que les paragraphes n'ont pas de marges inutiles */
+	:global(.content-bubble p) {
+		margin: 0 0 10px 0;
+	}
+	:global(.content-bubble p:last-child) {
+		margin-bottom: 0;
+	}
+	/* --- RÉFLEXION VERSION AGENT --- */
+	.thinking-container {
+		margin-bottom: 15px;
+		width: 100%;
+		animation: slideIn 0.3s ease-out;
+	}
+
+	.thinking-container details {
+		background-color: rgba(17, 24, 39, 0.6);
+		border: 1px solid rgba(231, 100, 79, 0.4);
+		border-radius: 12px;
+		padding: 5px; /* Plus compact */
+		color: #94a3b8;
+		font-family: 'Fira Code', monospace;
+		transition: all 0.3s ease;
+	}
+
+	/* Le bandeau de statut (Summary) */
+	.thinking-container summary {
+		cursor: pointer;
+		padding: 8px 12px;
+		outline: none;
+		list-style: none;
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		font-size: 0.85rem;
+		color: #e7644f;
+	}
+
+	/* Le petit point qui pulse pendant la réflexion */
+	.pulse-dot {
+		width: 8px;
+		height: 8px;
+		background-color: #e7644f;
+		border-radius: 50%;
+		box-shadow: 0 0 8px rgba(231, 100, 79, 0.8);
+		animation: pulse-glow 1.5s infinite ease-in-out;
+		flex-shrink: 0;
+	}
+
+	@keyframes pulse-glow {
+		0%,
+		100% {
+			transform: scale(1);
+			opacity: 1;
+		}
+		50% {
+			transform: scale(1.4);
+			opacity: 0.5;
+		}
+	}
+
+	/* Contenu de la réflexion (Détails) */
+	.thinking-content {
+		margin-top: 5px;
+		padding: 10px 15px;
+		border-top: 1px dashed rgba(231, 100, 79, 0.2);
+		font-style: italic;
+		line-height: 1.5;
+		font-size: 0.8rem;
+		max-height: 200px; /* On limite pour éviter de casser le scroll */
+		overflow-y: auto;
+	}
+
+	/* Animation pour l'apparition des messages */
+	@keyframes slideIn {
+		from {
+			opacity: 0;
+			transform: translateY(10px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
 	:global(body) {
 		margin: 0;
 		padding: 0;
@@ -310,7 +434,7 @@
 		transform: scale(1.02); /* La bulle grossit légèrement au survol */
 		box-shadow: 0 0 15px rgba(255, 154, 139, 0.6);
 	}
-	:global(.message-content pre) {
+	:global(.message pre) {
 		background-color: #0d1117;
 		padding: 15px;
 		border-radius: 8px;
@@ -318,12 +442,12 @@
 		margin: 10px 0;
 		border: 1px solid #30363d;
 	}
-	:global(.message-content code) {
+	:global(.message code) {
 		font-family: 'Fira Code', 'Courier New', monospace;
 		font-size: 0.9em;
 		color: #e6edf3;
 	}
-	:global(.message-content :not(pre) > code) {
+	:global(.message :not(pre) > code) {
 		background-color: rgba(110, 118, 129, 0.4);
 		padding: 0.2em 0.4em;
 		border-radius: 6px;

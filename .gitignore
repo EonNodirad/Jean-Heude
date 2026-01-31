@@ -30,3 +30,7 @@ vite.config.ts.timestamp-*
 
 **/memoire.db
 qdrant_storage/
+
+__pycache__/
+*.pyc
+.venv/

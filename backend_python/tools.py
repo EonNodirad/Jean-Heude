@@ -1,23 +1,45 @@
 import yaml
 import datetime
 import os
+import re
+import sys
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from dotenv import load_dotenv
 
+load_dotenv()
 CONFIG_PATH = "mcp_config.yaml"
 
 def load_mcp_config():
     if not os.path.exists(CONFIG_PATH):
         return {"mcp_servers": {}}
     with open(CONFIG_PATH, "r") as f:
-        return yaml.safe_load(f)
+        
+        content = f.read()
+        def replace_env_var(match):
+            var_name = match.group(1)
+            val = os.getenv(var_name)
+            
+            if val is None:
+                # On utilise sys.stderr pour ne pas polluer le flux JSON-RPC de MCP
+                print(f"⚠️ Attention : La variable {var_name} est absente du .env !", file=sys.stderr)
+                return f"MISSING_{var_name}"
+            
+            # 2. CORRECTION DU TYPO : group(0) au lieu de groupe(0)
+            return val
+        pattern = re.compile(r"\${(\w+)}")
+        fixed_content = pattern.sub(replace_env_var, content)
+        
+        # On parse le YAML final "nettoyé"
+        return yaml.safe_load(fixed_content)
+
 
 async def get_all_tools():
     """Charge dynamiquement TOUS les outils de TOUS les serveurs du YAML"""
     config = load_mcp_config()
     all_tools = []
 
-    # 1. On garde toujours notre petit outil natif pour l'heure
+    # 1. Outil natif
     all_tools.append({
         "type": "function",
         "function": {
@@ -27,15 +49,20 @@ async def get_all_tools():
         },
     })
 
-    # 2. On boucle sur chaque serveur défini dans le YAML
+    # 2. Boucle sur les serveurs
     for server_name, srv_config in config.get("mcp_servers", {}).items():
+        # ASTUCE : On s'assure que l'environnement force un mode non-interactif
+        env = srv_config.get("env", os.environ.copy())
+        env["PYTHONUNBUFFERED"] = "1" 
+
         params = StdioServerParameters(
             command=srv_config["command"],
             args=srv_config["args"],
-            env=srv_config.get("env")
+            env=env
         )
         
         try:
+            # On réduit le timeout pour ne pas bloquer tout le démarrage si un serveur est lent
             async with stdio_client(params) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
@@ -44,26 +71,23 @@ async def get_all_tools():
                         all_tools.append({
                             "type": "function",
                             "function": {
-                                "name": tool.name, # ex: read_file
+                                "name": tool.name,
                                 "description": tool.description,
                                 "parameters": tool.inputSchema,
                             }
                         })
         except Exception as e:
-            if hasattr(e, 'exceptions'):
-                for sub_e in e.exceptions:
-                    print(f"❌ Sous-erreur MCP : {sub_e}")
-            else:
-                print(f"⚠️ Erreur MCP : {e}")
+            # On log l'erreur sur stderr de NOTRE backend pour ne pas polluer l'interface
+            print(f"⚠️ Erreur lors de l'initialisation de {server_name}: {e}", file=sys.stderr)
 
     return all_tools
 
 async def call_tool_execution(name, args):
     """Cherche quel serveur possède l'outil et l'exécute"""
     if name == "get_current_time":
-        return f"Il est {datetime.datetime.now().strftime('%H:%M:%S')}."
-
-    # On doit retrouver quel serveur a cet outil
+        maintenant = datetime.datetime.now()
+        date_longue = maintenant.strftime('%A %d %B %Y, %H:%M:%S')
+        return f"Nous sommes le {date_longue}."
     config = load_mcp_config()
     for server_name, srv_config in config.get("mcp_servers", {}).items():
         params = StdioServerParameters(
@@ -72,17 +96,21 @@ async def call_tool_execution(name, args):
             env=srv_config.get("env")
         )
         try:
-        # On vérifie si l'outil appartient à ce serveur
-        # Note : Dans une version pro, on garderait les sessions ouvertes pour aller plus vite
             async with stdio_client(params) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     available_tools = await session.list_tools()
                 
                     if any(t.name == name for t in available_tools.tools):
+                        # L'outil est trouvé, on l'exécute
                         result = await session.call_tool(name, args)
-                        return result.content[0].text if result.content else "Pas de réponse."
+                        
+                        # Extraction propre du texte de réponse
+                        if hasattr(result, 'content') and result.content:
+                            return result.content[0].text
+                        return "L'outil a été exécuté mais n'a renvoyé aucun texte."
         except Exception as e:
-            # ICI : On affiche l'erreur réelle dans les logs du serveur
-            print(f"❌ Erreur CRITIQUE sur le serveur MCP {server_name} : {type(e).__name__} - {e}")
-            return f"Désolé, l'outil {name} a rencontré un problème technique."
+            print(f"❌ Erreur sur {server_name} lors de l'exécution de {name}: {e}", file=sys.stderr)
+            return f"Désolé, l'outil {name} a rencontré un problème."
+
+    return f"Outil {name} non trouvé sur les serveurs configurés."
