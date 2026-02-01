@@ -7,6 +7,7 @@
 	import { fly } from 'svelte/transition';
 	import trois_points from '$lib/assets/trois-points.png';
 	import { handleStream } from '$lib/lecture_reponse';
+	import { createRecorder } from '$lib/voice.svelte';
 	let messages = $state([
 		{
 			role: 'assistant',
@@ -28,6 +29,32 @@
 
 	let currentMessage = $state('');
 	let attente = $state(false);
+
+	const recorder = createRecorder({
+		getSessionId: () => sessionActive,
+		onTranscriptionStart: () => {
+			attente = true;
+			messages = [
+				{ role: 'assistant', think: '', content: '', status: 'Transcription...' },
+				...messages
+			];
+		},
+		onStream: (think, content, status) => {
+			messages[0].think = think;
+			messages[0].content = content;
+			messages[0].status = status;
+		},
+		onEnd: () => {
+			attente = false;
+			rafraichirSession();
+		},
+		onModelChosen: (model) => {
+			modelChoisi = model;
+			voirModel = true;
+			setTimeout(() => (voirModel = false), 3000);
+		},
+		onSessionCreated: (id) => (sessionActive = id)
+	});
 	onMount(async () => {
 		await rafraichirSession();
 	});
@@ -178,6 +205,16 @@
 			>
 				<img src={nouvelleDiscussion} aria-hidden="true" alt="" /></button
 			>
+			<button
+				type="button"
+				class="mic-btn"
+				class:recording={recorder.isRecording}
+				onmousedown={recorder.start}
+				onmouseup={recorder.stop}
+				onmouseleave={recorder.stop}
+			>
+				{recorder.isRecording ? '🔴' : '🎤'}
+			</button>
 		</form>
 	</div>
 	{#if voirModel}
