@@ -1,16 +1,41 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
 import sqlite3
 import os
 import memory
 import aiosqlite
+import io
+import asyncio
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # --- PHASE DE DÉMARRAGE ---
+    print("🚀 Initialisation de Jean-Heude...")
+    await memory.get_tools()     # On charge les outils en RAM
+    memory.get_memory()
+    print("✅ Jean-Heude est prêt !")
+    yield
+    # --- PHASE DE FERMETURE ---
+    print("💤 Extinction...")
+
 # Au début de main.py
+
 if not os.path.exists("memory"):
     os.makedirs("memory")
 
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"], # L'URL de ton site Svelte
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 class ChatInput(BaseModel):
     content : str
     session_id: int | None
@@ -84,3 +109,16 @@ async def get_history(session_id: int) :
     print(session_id)
     message = cursor.fetchall()
     return [{"role":m[0] , "content":m[1]} for m in message]
+
+
+@app.get("/api/tts/{audio_id}")
+
+async def get_tts(audio_id:str):
+    for _ in range(30):
+        if audio_id in memory.audio_store:
+            data = memory.audio_store.pop(audio_id) # On récupère et on vide pour la mémoireS
+            if isinstance(data, io.BytesIO):
+                return StreamingResponse(data, media_type="audio/wav")
+            return StreamingResponse(data, media_type="audio/wav")
+        await asyncio.sleep(0.1)
+    return {"error": "Not ready yet"}
