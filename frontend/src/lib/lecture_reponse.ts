@@ -2,7 +2,7 @@ import { audioQueue } from '$lib/TTS';
 
 let currentThinking = '';
 let currentResponse = '';
-let texteLu = "";
+
 const ACTIONS = [
 	{
 		detect: ['recherche', 'cherche', 'google', 'duckduckgo', 'web'],
@@ -31,8 +31,6 @@ export async function handleStream(
 	currentResponse = '';
 	const decoder = new TextDecoder();
 	let lastStatus = 'Analyse de la demande...';
-	texteLu = "";
-	let dernierStatutVocal = "";
 
 	while (true) {
 		const result = await reader?.read();
@@ -57,9 +55,10 @@ export async function handleStream(
 			currentThinking += cleanText;
 
 			for (const action of ACTIONS) {
-				if (action.detect.some((keyword: string) => currentThinking.toLowerCase().includes(keyword))) {
+				if (
+					action.detect.some((keyword: string) => currentThinking.toLowerCase().includes(keyword))
+				) {
 					lastStatus = `${action.label}`;
-
 				}
 			}
 			updateCallback(currentThinking, currentResponse, lastStatus);
@@ -67,11 +66,6 @@ export async function handleStream(
 			// On ajoute le texte nettoyé à la réponse
 			currentResponse += cleanRep;
 			updateCallback(currentThinking, currentResponse, 'réponse finalisée');
-
 		}
 	} // <--- FIN DE LA BOUCLE WHILE
-
-	// --- 4. LE RELIQUAT (À l'extérieur de la boucle !) ---
-	// Une fois que tout le texte est arrivé, on vérifie s'il reste un bout non lu
-	const resteALire = currentResponse.substring(texteLu.length);
 }

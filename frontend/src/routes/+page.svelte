@@ -8,6 +8,8 @@
 	import trois_points from '$lib/assets/trois-points.png';
 	import { handleStream } from '$lib/lecture_reponse';
 	import { createRecorder } from '$lib/voice.svelte';
+	import micro from '$lib/assets/les-ondes-radio.png';
+
 	let messages = $state([
 		{
 			role: 'assistant',
@@ -213,7 +215,11 @@
 				onmouseup={recorder.stop}
 				onmouseleave={recorder.stop}
 			>
-				{recorder.isRecording ? '🔴' : '🎤'}
+				{#if recorder.isRecording}
+					🔴
+				{:else}
+					<img src={micro} aria-hidden="true" alt="" />
+				{/if}
 			</button>
 		</form>
 	</div>
@@ -517,7 +523,7 @@
 		padding-bottom: 5px;
 		flex-grow: 1;
 		border-radius: 20px;
-		padding: 10px 20px;
+		padding: 10px 15px;
 		outline: none;
 		width: 100%;
 	}
@@ -525,11 +531,22 @@
 		transform: scale(1.02);
 		box-shadow: 0 0 15px rgba(255, 154, 139, 0.6);
 	}
-
+	.mic-btn {
+		all: unset;
+		padding-right: 10px;
+		padding-left: 3px;
+	}
+	.mic-btn img {
+		width: 30px;
+		height: 30px;
+		/* Si ton SVG est noir, ceci peut le rendre blanc/clair */
+		filter: invert(1);
+	}
+	.mic-btn:hover {
+		transform: scale(1.3); /* Petit effet de zoom */
+	}
 	.new-chat {
 		all: unset;
-		width: 45px;
-		height: 45px;
 
 		/* On centre l'icône à l'intérieur */
 		display: flex;
@@ -540,7 +557,7 @@
 		border-radius: 8px;
 		cursor: pointer;
 		transition: all 0.2s ease;
-		padding: 0;
+		padding-left: 3px;
 	}
 
 	.new-chat img {
