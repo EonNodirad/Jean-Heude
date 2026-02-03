@@ -34,3 +34,5 @@ qdrant_storage/
 __pycache__/
 *.pyc
 .venv/
+
+backend_python/model/tts/kokoro-v1.0.onnx

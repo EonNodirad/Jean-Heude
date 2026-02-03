@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 load_dotenv()
 CONFIG_PATH = "mcp_config.yaml"
 
+
+
 def load_mcp_config():
     if not os.path.exists(CONFIG_PATH):
         return {"mcp_servers": {}}
