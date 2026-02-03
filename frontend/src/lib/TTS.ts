@@ -1,4 +1,5 @@
 // src/lib/TTS.ts (ou AudioQueue.ts)
+import { env } from '$env/dynamic/public';
 class AudioQueue {
 	// On ne stocke plus des IDs, mais des URLs déjà téléchargées (Blobs)
 	private readyToPlayQueue: string[] = [];
@@ -34,7 +35,7 @@ class AudioQueue {
 	private fetchWithRetry = async (audioId: string, retries = 10): Promise<string> => {
 		for (let i = 0; i < retries; i++) {
 			try {
-				const response = await fetch(`http://localhost:8000/api/tts/${audioId}`);
+				const response = await fetch(`${env.PUBLIC_URL_SERVEUR_PYTHON}/api/tts/${audioId}`);
 				if (response.ok && response.headers.get('content-type')?.includes('audio')) {
 					const blob = await response.blob();
 					return URL.createObjectURL(blob);
