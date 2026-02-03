@@ -1,5 +1,6 @@
 
 import os
+import io
 from IA import Orchestrator
 from mem0 import Memory 
 from typing import AsyncGenerator, Any
@@ -8,10 +9,14 @@ from ollama import AsyncClient
 from dotenv import load_dotenv
 import uuid
 import asyncio
+import re
 
-from tts_service import TTSService
 audio_store ={}
-tts = TTSService()
+
+import httpx
+http_client = httpx.AsyncClient(timeout=20.0)
+TTS_SERVER_URL = "http://localhost:8002/generate"
+
 load_dotenv()
 remote_host = os.getenv("URL_SERVER_OLLAMA")
 url_qdrant = os.getenv("URL_QDRANT")
@@ -22,6 +27,15 @@ client = AsyncClient(host=remote_host)
 model = "phi3:mini"
     
 _available_tools = None
+
+def clean_text_for_tts(text):
+    # 1. Supprime les URL (ça tue le temps de calcul)
+    text = re.sub(r'https?://\S+', '', text)
+    # 2. Supprime les symboles Markdown (*, #, _, [ ], ( ))
+    text = re.sub(r'[\*\#\_\[\]\(\)\`]', '', text)
+    # 3. Supprime les sauts de ligne excessifs
+    text = text.replace('\n', ' ')
+    return text.strip()
 
 async def get_tools():
     global _available_tools
@@ -92,13 +106,17 @@ def decide_model(message:str):
 
 async def pre_generate_audio(audio_id, text):
     try:
-        loop = asyncio.get_running_loop()
-        # On exécute la génération lourde dans un thread séparé pour ne pas bloquer le chat
-        audio_data = await loop.run_in_executor(None, tts.generate_wav, text)
-        audio_store[audio_id] = audio_data
-        print(f"✅ Audio {audio_id} prêt")
+        response = await http_client.post(TTS_SERVER_URL, json={"text": text})
+            
+        if response.status_code == 200:
+                # On stocke le binaire reçu dans ton audio_store habituel
+            audio_store[audio_id] = io.BytesIO(response.content)
+            print(f"✅ Audio {audio_id} généré par le service TTS et mis en cache")
+        else:
+            print(f"❌ Erreur serveur TTS distant : {response.status_code}")
+                
     except Exception as e:
-        print(f"Erreur pré-génération TTS: {e}")
+        print(f"❌ Erreur de liaison avec le service TTS: {e}")
         
 async def chat_with_memories(message: str, chosen_model: str, user_id: str = "default_user") -> AsyncGenerator[str,Any]:
     # 1. Initialisation et récupération de la mémoire
@@ -164,17 +182,14 @@ async def chat_with_memories(message: str, chosen_model: str, user_id: str = "de
                     content += chunk.message.content
                 #--------------------------------logic TTS
                     buffer_audio += chunk.message.content
-                    if any(p in chunk.message.content for p in [".", "!", "?", "\n", ";"]) and len(buffer_audio) > 10:
-                        audio_id = str(uuid.uuid4())
-                        phrase_a_lire = buffer_audio.strip()
-                        
-                        # LANCEMENT EN ARRIÈRE-PLAN (Non-bloquant)
-                        asyncio.create_task(pre_generate_audio(audio_id, phrase_a_lire))
-                        
-                        # On envoie le signal à Svelte
-                        yield f"||AUDIO_ID:{audio_id}||"
-                        
-                        buffer_audio = "" # Reset le buffer
+                    if any(p in chunk.message.content for p in [".", "!", "?", "\n", ";",","]) or len(buffer_audio) > 40 :
+                        if len(buffer_audio.strip()) > 5:
+                            audio_id = str(uuid.uuid4())
+                            phrase_a_lire = clean_text_for_tts(buffer_audio)
+                            # On lance la tâche
+                            asyncio.create_task(pre_generate_audio(audio_id, phrase_a_lire))
+                            yield f"||AUDIO_ID:{audio_id}||"
+                            buffer_audio = ""
 
 
                 if chunk.message.tool_calls:

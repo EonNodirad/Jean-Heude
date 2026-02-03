@@ -118,13 +118,14 @@ async def get_history(session_id: int):
 @app.get("/api/tts/{audio_id}")
 
 async def get_tts(audio_id:str):
-    for _ in range(30):
+    for _ in range(750):
         if audio_id in memory.audio_store:
             data = memory.audio_store.pop(audio_id) # On récupère et on vide pour la mémoireS
+            data.seek(0)
             if isinstance(data, io.BytesIO):
                 return StreamingResponse(data, media_type="audio/wav")
             return StreamingResponse(data, media_type="audio/wav")
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.02)
     return {"error": "Not ready yet"}
 
 @app.post("/stt")

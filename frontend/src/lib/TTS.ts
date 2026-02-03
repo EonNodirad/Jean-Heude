@@ -1,76 +1,71 @@
+// src/lib/TTS.ts (ou AudioQueue.ts)
 class AudioQueue {
-    private queue: string[] = [];
+    // On ne stocke plus des IDs, mais des URLs déjà téléchargées (Blobs)
+    private readyToPlayQueue: string[] = [];
     private isPlaying = false;
     private audio: HTMLAudioElement | null = null;
 
-    async add(audioId: string) {
-        this.queue.push(audioId);
-        if (!this.isPlaying) {
-            this.playNext();
+    // 1. Dés qu'un ID arrive, on lance le fetch SANS ATTENDRE
+    add = async (audioId: string) => {
+        console.log(`%c📡 [Stream] ID reçu: ${audioId} -> Téléchargement lancé`, "color: #e7644f;");
+
+        // On lance le fetch en arrière-plan
+        this.fetchAndBuffer(audioId);
+    }
+
+    private fetchAndBuffer = async (audioId: string) => {
+        const start = performance.now();
+        const url = await this.fetchWithRetry(audioId);
+
+        if (url) {
+            console.log(`%c📥 [Buffer] Audio prêt pour ${audioId} (${Math.round(performance.now() - start)}ms)`, "color: #38bdf8;");
+            this.readyToPlayQueue.push(url);
+
+            // Si rien ne joue, on lance la lecture de la file
+            if (!this.isPlaying) {
+                this.playNext();
+            }
         }
     }
 
-    private async fetchWithRetry(audioId: string, retries = 5): Promise<string> {
+    private fetchWithRetry = async (audioId: string, retries = 10): Promise<string> => {
         for (let i = 0; i < retries; i++) {
             try {
                 const response = await fetch(`http://localhost:8000/api/tts/${audioId}`);
-                if (response.ok) {
+                if (response.ok && response.headers.get("content-type")?.includes("audio")) {
                     const blob = await response.blob();
                     return URL.createObjectURL(blob);
                 }
-            } catch (e) { console.error("Tentative échouée", i); }
-
-            // Attendre 200ms avant la prochaine tentative si le serveur n'est pas prêt
-            await new Promise(resolve => setTimeout(resolve, 200));
+            } catch (e) { /* ignore */ }
+            await new Promise(r => setTimeout(r, 100)); // Polling rapide
         }
         return "";
     }
-    private async playNext() {
-        if (this.queue.length === 0) {
+
+    private playNext = () => {
+        if (this.readyToPlayQueue.length === 0) {
             this.isPlaying = false;
             return;
         }
 
         this.isPlaying = true;
-        const audioId = this.queue.shift()!;
+        const url = this.readyToPlayQueue.shift()!;
+        this.audio = new Audio(url);
 
-        try {
-            const url = await this.fetchWithRetry(audioId);
+        this.audio.onended = () => {
+            URL.revokeObjectURL(url); // Libère la RAM
+            this.playNext(); // Joue le suivant qui est DÉJÀ dans le buffer
+        };
 
-            if (!url) {
-                this.playNext();
-                return;
-            }
-
-            this.audio = new Audio(url);
-
-            // --- CRITIQUE : Relancer la file à la fin du son ---
-            this.audio.onended = () => {
-                URL.revokeObjectURL(url); // Libère la RAM
-                this.playNext();
-            };
-
-            // Gestion des erreurs de lecture (ex: autoplay bloqué)
-            await this.audio.play().catch(err => {
-                console.warn("Autoplay bloqué ou erreur de lecture:", err);
-                // Si ça bloque, on passe au suivant après un petit délai
-                setTimeout(() => this.playNext(), 1000);
-            });
-
-        } catch (err) {
-            console.error("Erreur de lecture", err);
-            this.playNext();
-        }
+        this.audio.play().catch(() => this.playNext());
     }
-    stop() {
-        if (this.audio) {
-            this.audio.pause();
-            this.audio = null;
-        }
-        this.queue = [];
+
+    stop = () => {
+        if (this.audio) { this.audio.pause(); this.audio = null; }
+        this.readyToPlayQueue.forEach(url => URL.revokeObjectURL(url));
+        this.readyToPlayQueue = [];
         this.isPlaying = false;
     }
 }
-
 
 export const audioQueue = new AudioQueue();
