@@ -8,11 +8,12 @@ connection =sqlite3.connect("memory/memoire.db")
 
 client = TestClient(app)
 
-
+cursor = connection.cursor()
+cursor.execute("CREATE TABLE IF NOT EXISTS memory_chat (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT, timestamp TIMESTAMP, sessionID INTEGER)")
+cursor.execute("CREATE TABLE IF NOT EXISTS historique_chat (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TIMESTAMP, resume TEXT, userID TEXT)")
 @pytest.fixture(autouse=True)
 def setup_db():
     """Nettoie la base de données avant chaque test"""
-    cursor = connection.cursor()
     cursor.execute("DELETE FROM memory_chat")
     cursor.execute("DELETE FROM historique_chat")
     connection.commit()
