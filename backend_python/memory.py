@@ -11,16 +11,17 @@ import uuid
 import asyncio
 import re
 
+import httpx
+
 audio_store ={}
 
-import httpx
-http_client = httpx.AsyncClient(timeout=20.0)
-TTS_SERVER_URL = "http://localhost:8002/generate"
+
 
 load_dotenv()
 remote_host = os.getenv("URL_SERVER_OLLAMA")
 url_qdrant = os.getenv("URL_QDRANT")
-
+http_client = httpx.AsyncClient(timeout=20.0)
+TTS_SERVER_URL = os.getenv("TTS_SERVER_URL")
 orchestrator = Orchestrator()
 client = AsyncClient(host=remote_host)
 

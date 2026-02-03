@@ -19,7 +19,28 @@ services:
       - "8000:8000"
     volumes:
       - ./backend_python/memory:/app/memory
-
+    depends_on:
+      - qdrant
+      - tts
+      - stt
+  tts:
+    build: ./backend_python/tts
+    restart: always
+    env_file:
+      - ./backend_python/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8002:8002"
+  stt:
+    build: ./backend_python/stt
+    restart: always
+    env_file:
+      - ./backend_python/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8001:8001"
   frontend:
     build: ./frontend
     restart: always
