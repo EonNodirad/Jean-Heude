@@ -35,4 +35,4 @@ __pycache__/
 *.pyc
 .venv/
 
-backend_python/model/tts/kokoro-v1.0.onnx
+backend_python/tts/model/tts/kokoro-v1.0.onnx
