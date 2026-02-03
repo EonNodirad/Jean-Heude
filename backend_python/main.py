@@ -2,16 +2,16 @@ from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
-import sqlite3
 import os
 import httpx
 import memory
 import aiosqlite
 import io
 import asyncio
+from dotenv import load_dotenv
 from contextlib import asynccontextmanager
-
-STT_SERVER_URL = "http://localhost:8001/transcribe"
+load_dotenv()
+STT_SERVER_URL = os.getenv("STT_SERVER_URL")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- PHASE DE DÉMARRAGE ---
@@ -105,7 +105,7 @@ async def get_historique_list():
         db.row_factory = aiosqlite.Row # Optionnel : pour accéder par nom de colonne
         async with db.execute("SELECT id, resume, timestamp FROM historique_chat ORDER BY timestamp DESC") as cursor:
             lignes = await cursor.fetchall()
-            return [{"id": l[0], "resume": l[1], "timestamp": l[2]} for l in lignes]
+            return [{"id": ligne[0], "resume": ligne[1], "timestamp": ligne[2]} for ligne in lignes]
 
 @app.get("/history/{session_id}")
 async def get_history(session_id: int):

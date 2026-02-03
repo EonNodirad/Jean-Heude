@@ -1,0 +1,11 @@
+# --- Serveur API ---
+fastapi
+uvicorn
+
+# --- Moteur de Synthèse Vocale ---
+kokoro-onnx
+onnxruntime
+numpy
+
+# --- Optionnel mais recommandé pour la gestion audio ---
+soundfile
