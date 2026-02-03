@@ -1,3 +1,5 @@
+import { audioQueue } from '$lib/TTS';
+
 let currentThinking = '';
 let currentResponse = '';
 
@@ -29,28 +31,41 @@ export async function handleStream(
 	currentResponse = '';
 	const decoder = new TextDecoder();
 	let lastStatus = 'Analyse de la demande...';
+
 	while (true) {
 		const result = await reader?.read();
 		if (!result || result.done) break;
 
 		const rep = decoder.decode(result.value, { stream: true });
 
-		if (rep.includes('¶')) {
-			const cleanText = rep.replace(/[¶]/g, '');
+		// --- 1. DÉTECTION DU TICKET AUDIO (Nouveau système) ---
+		if (rep.includes('||AUDIO_ID:')) {
+			const match = rep.match(/\|\|AUDIO_ID:(.*?)\|\|/);
+			if (match) {
+				const audioId = match[1];
+				audioQueue.add(audioId); // On lance le pré-chargement immédiat
+			}
+		}
+
+		// --- 2. NETTOYAGE DU TEXTE (Pour ne pas afficher les IDs à l'écran) ---
+		const cleanRep = rep.replace(/\|\|AUDIO_ID:.*?\|\|/g, '');
+
+		if (cleanRep.includes('¶')) {
+			const cleanText = cleanRep.replace(/[¶]/g, '');
 			currentThinking += cleanText;
 
 			for (const action of ACTIONS) {
 				if (
 					action.detect.some((keyword: string) => currentThinking.toLowerCase().includes(keyword))
 				) {
-					lastStatus = `${action.icon} ${action.label}`;
+					lastStatus = `${action.label}`;
 				}
 			}
-
 			updateCallback(currentThinking, currentResponse, lastStatus);
 		} else {
-			currentResponse += rep;
-			updateCallback(currentThinking, currentResponse, 'réponse finalisé');
+			// On ajoute le texte nettoyé à la réponse
+			currentResponse += cleanRep;
+			updateCallback(currentThinking, currentResponse, 'réponse finalisée');
 		}
-	}
+	} // <--- FIN DE LA BOUCLE WHILE
 }
