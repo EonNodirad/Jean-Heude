@@ -78,7 +78,6 @@ config = {
 
 
 _memory_instance = None
-_list_models = None
 
 def get_memory():
     """Initialise la mémoire seulement au premier appel"""
@@ -87,22 +86,14 @@ def get_memory():
         _memory_instance = Memory.from_config(config)
     return _memory_instance
 
-def decide_model(message:str):
-    global _list_models
-    if _list_models is None:
-        raw_models =orchestrator.get_local_models()
-        print  (_list_models)
-        blacklist = ["embed", "classification", "rerank","vision","mini","llama"]
-        _list_models =[
-            m for m in raw_models
-            if not any(word in m.lower()for word in blacklist)
-        ]
-        print(f"--- Modèles de chat autorisés : {_list_models} ---")
-    chosen_model = orchestrator.choose_model(message,_list_models)
-    print(chosen_model)
-    if "embed" in chosen_model:
-        chosen_model = "llama3.1:8b"
-    print(f"--- Modèle sélectionné par Jean-Heude : {chosen_model} ---")
+async def decide_model(message:str):
+    global _available_tools
+    
+    # 2. On demande à l'orchestrateur de choisir en lui donnant cette liste
+    # Note: Ton orchestrateur interne utilise un prompt similaire à celui ci-dessus
+    chosen_model = await orchestrator.choose_model(message, _available_tools)
+    
+    print(f"--- 🎯 Décision : {chosen_model} ---")
     return chosen_model
 
 async def pre_generate_audio(audio_id, text):
@@ -144,99 +135,114 @@ async def chat_with_memories(message: str, chosen_model: str, user_id: str = "de
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": message}
     ]
-    assistant_response =""
-    total_assistant_content = ""
-    buffer_audio = ""
+    assistant_final_text = ""
     # 2. Récupération des outils MCP dynamiques
     # On le fait à chaque appel pour être sûr d'avoir les outils à jour
     available_tools = await get_tools()
     print("tools ok")
     # -----------------------------------------------------------------------
+    async for chunk in execute_agent_loop(messages, chosen_model, available_tools):
+        # On accumule le texte pur pour la mémoire (en ignorant les tags spéciaux)
+        if not chunk.startswith("¶") and not chunk.startswith("||AUDIO_ID:"):
+            assistant_final_text += chunk
+        
+        yield chunk
+    if assistant_final_text.strip():
+        conversation = [
+            {"role": "user", "content": message},
+            {"role": "assistant", "content": assistant_final_text}
+        ]
+        mem.add(conversation, user_id=user_id)
+
+async def execute_agent_loop(messages: list, chosen_model: str, available_tools: list) -> AsyncGenerator[str, Any]:
+    """
+    Gère la boucle de réflexion et d'exécution des outils (Agentic Loop).
+    Yield des fragments de texte, des blocs de pensée et des IDs audio.
+    """
+    assistant_full_response = ""
+    buffer_audio = ""
+    caps = await orchestrator.get_model_details(chosen_model)
+    
+    print(f" Jean-Heude utilise {chosen_model} | Think: {caps['can_think']} | Tools: {caps['can_use_tools']}")
     try:
-        print("début de boucle")
+        current_tools = available_tools if caps['can_think'] else None
         while True:
             stream = await client.chat(
-            model='qwen3:8b',
-            messages=messages,
-            tools=available_tools,
-            stream=True,
-            think = True,
-
+                model=chosen_model,
+                messages=messages,
+                tools=current_tools,
+                stream=True,
+                think=caps['can_think'],
             )
 
             thinking = ''
             content = ''
             tool_calls = []
-
             done_thinking = False
-            # accumulate the partial fields
+
             async for chunk in stream:
+                # 1. Gestion du "Thinking"
                 if chunk.message.thinking:
                     thinking += chunk.message.thinking
                     yield f"¶{chunk.message.thinking}"
+                
+                # 2. Gestion du Contenu (Réponse)
                 if chunk.message.content:
                     if not done_thinking:
                         done_thinking = True
-                    total_assistant_content += chunk.message.content
-                    assistant_response+= chunk.message.content
-                    yield chunk.message.content
-                    content += chunk.message.content
-                #--------------------------------logic TTS
-                    buffer_audio += chunk.message.content
-                    if any(p in chunk.message.content for p in [".", "!", "?", "\n", ";",","]) or len(buffer_audio) > 40 :
+                    
+                    text_chunk = chunk.message.content
+                    content += text_chunk
+                    assistant_full_response += text_chunk
+                    yield text_chunk
+
+                    # --- Logique TTS intégrée ---
+                    buffer_audio += text_chunk
+                    if any(p in text_chunk for p in [".", "!", "?", "\n", ";", ","]) or len(buffer_audio) > 40:
                         if len(buffer_audio.strip()) > 5:
                             audio_id = str(uuid.uuid4())
-                            phrase_a_lire = clean_text_for_tts(buffer_audio)
-                            # On lance la tâche
-                            asyncio.create_task(pre_generate_audio(audio_id, phrase_a_lire))
+                            phrase = clean_text_for_tts(buffer_audio)
+                            asyncio.create_task(pre_generate_audio(audio_id, phrase))
                             yield f"||AUDIO_ID:{audio_id}||"
                             buffer_audio = ""
 
-
+                # 3. Accumulation des appels d'outils
                 if chunk.message.tool_calls:
                     tool_calls.extend(chunk.message.tool_calls)
-                    print(chunk.message.tool_calls)
                     await asyncio.sleep(0.01)
 
-  # append accumulated fields to the messages
-            if thinking or content or tool_calls:
-                messages.append({'role': 'assistant', 'thinking': thinking, 'content': content, 'tool_calls': tool_calls})
+            # Mise à jour de l'historique pour l'IA
+            messages.append({'role': 'assistant', 'thinking': thinking, 'content': content, 'tool_calls': tool_calls})
 
+            # Si pas d'outils à appeler, on a fini !
             if not tool_calls:
                 break
+
+            # 4. Exécution des outils
             for call in tool_calls:
-                status_text = f"Je vais utiliser l'outil : {call.function.name}..."
-                yield f"\n*{status_text}.*\n"
-                yield "\n"
+                status_text = f"Utilisation de l'outil : {call.function.name}..."
+                yield f"\n*{status_text}*\n"
                 
+                # TTS pour le statut de l'outil
                 status_audio_id = str(uuid.uuid4())
                 asyncio.create_task(pre_generate_audio(status_audio_id, status_text))
                 yield f"||AUDIO_ID:{status_audio_id}||"
-                # Exécution
+
+                # Appel réel de l'outil via ton module tools
                 result = await tools.call_tool_execution(call.function.name, call.function.arguments)
 
-                # On ajoute le résultat au contexte pour le tour suivant
                 messages.append({
                     'role': 'tool',
                     'name': call.function.name,
                     'content': str(result),
                     'tool_call_id': getattr(call, 'id', 'call_' + call.function.name)
                 })
-        # 7. SAUVEGARDE EN MÉMOIRE
-        if assistant_response.strip():
-            conversation = [
-                {"role": "user", "content": message},
-                {"role": "assistant", "content": assistant_response}
-            ]
-            mem.add(conversation, user_id=user_id)
 
-
+        # Gestion du reliquat audio à la fin
         if buffer_audio.strip():
-                audio_id = str(uuid.uuid4())
-                asyncio.create_task(pre_generate_audio(audio_id, buffer_audio.strip()))
-                yield f"||AUDIO_ID:{audio_id}||"
-                buffer_audio = ""
+            final_audio_id = str(uuid.uuid4())
+            asyncio.create_task(pre_generate_audio(final_audio_id, buffer_audio.strip()))
+            yield f"||AUDIO_ID:{final_audio_id}||"
+
     except Exception as e:
-        error_msg = f"Erreur Jean-Heude : {str(e)}"
-        print(f"DEBUG ERROR: {error_msg}")
-        yield error_msg
+        yield f"Erreur dans la boucle agentique : {str(e)}"

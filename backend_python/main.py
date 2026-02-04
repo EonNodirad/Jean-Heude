@@ -20,7 +20,7 @@ async def lifespan(app: FastAPI):
         await db.execute("CREATE TABLE IF NOT EXISTS memory_chat (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT, timestamp TIMESTAMP, sessionID INTEGER)")
         await db.execute("CREATE TABLE IF NOT EXISTS historique_chat (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TIMESTAMP, resume TEXT, userID TEXT)")
         await db.commit()
-    await memory.get_tools()     # On charge les outils en RAM
+    await memory.get_tools()  
     memory.get_memory()
     print("✅ Jean-Heude est prêt !")
     yield
@@ -67,7 +67,7 @@ async def run_jean_heude_logic(text_content: str, session_id: int | None):
         print(f"💾 Sauvegarde User : {text_content}")
 
     # 3. Sélection du modèle et génération
-    chosen_model = memory.decide_model(text_content)
+    chosen_model = await memory.decide_model(text_content)
 
     async def generate():
         full_text = ""
