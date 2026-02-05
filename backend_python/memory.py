@@ -110,11 +110,13 @@ async def pre_generate_audio(audio_id, text):
     except Exception as e:
         print(f"❌ Erreur de liaison avec le service TTS: {e}")
         
-async def chat_with_memories(message: str, chosen_model: str, user_id: str = "default_user") -> AsyncGenerator[str,Any]:
+async def chat_with_memories(history: list, chosen_model: str, user_id: str = "default_user") -> AsyncGenerator[str,Any]:
     # 1. Initialisation et récupération de la mémoire
     print("début mémoire")
+    last_user_message = next((m['content'] for m in reversed(history) if m['role'] == 'user'), "")
+    print(f" Recherche mémoires long terme pour : {last_user_message}")
     mem = get_memory()
-    relevant_memories = mem.search(query=message, user_id=user_id, limit=3)
+    relevant_memories = mem.search(query=last_user_message, user_id=user_id, limit=3)
     
     # Formatage de la mémoire
     memories_str = ""
@@ -126,15 +128,13 @@ async def chat_with_memories(message: str, chosen_model: str, user_id: str = "de
     system_prompt = (
     f"Tu es Jean-Heude, un assistant personnel franc et qui donne un avis objectif même si pas en accord avec l'utilisateur\n"
     "Tu répondra en format markdown"
-    "limite ta pensée au strict minimum. Ne boucle pas si un outil donne une "
-    "réponse claire. Sois efficace."
+    "donne une réponse claire. "
+    "Comme si c'était dialogue orals."
     f"\nUser Memories:\n{memories_str}"
+    "Utilise le contexte de la conversation ci-dessous pour répondre de manière cohérente."
 )
     
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": message}
-    ]
+    messages = [{"role": "system", "content": system_prompt}]+ history
     assistant_final_text = ""
     # 2. Récupération des outils MCP dynamiques
     # On le fait à chaque appel pour être sûr d'avoir les outils à jour
@@ -149,7 +149,7 @@ async def chat_with_memories(message: str, chosen_model: str, user_id: str = "de
         yield chunk
     if assistant_final_text.strip():
         conversation = [
-            {"role": "user", "content": message},
+            {"role": "user", "content": last_user_message},
             {"role": "assistant", "content": assistant_final_text}
         ]
         mem.add(conversation, user_id=user_id)
@@ -161,11 +161,12 @@ async def execute_agent_loop(messages: list, chosen_model: str, available_tools:
     """
     assistant_full_response = ""
     buffer_audio = ""
+    is_in_hidden_thought = False
     caps = await orchestrator.get_model_details(chosen_model)
     
     print(f" Jean-Heude utilise {chosen_model} | Think: {caps['can_think']} | Tools: {caps['can_use_tools']}")
     try:
-        current_tools = available_tools if caps['can_think'] else None
+        current_tools = available_tools if caps['can_use_tools'] else None
         while True:
             stream = await client.chat(
                 model=chosen_model,
@@ -196,6 +197,19 @@ async def execute_agent_loop(messages: list, chosen_model: str, available_tools:
                     assistant_full_response += text_chunk
                     yield text_chunk
 
+                    if "<think>" in text_chunk:
+                        is_in_hidden_thought = True
+                        # On peut quand même envoyer la pensée au front avec le symbole ¶
+                        yield "¶" 
+                        continue 
+                    
+                    if "</think>" in text_chunk:
+                        is_in_hidden_thought = False
+                        continue
+
+                    if is_in_hidden_thought:
+                        yield f"¶{text_chunk}" # On l'envoie au front mais avec le tag pensée
+                        continue
                     # --- Logique TTS intégrée ---
                     buffer_audio += text_chunk
                     if any(p in text_chunk for p in [".", "!", "?", "\n", ";", ","]) or len(buffer_audio) > 40:
@@ -222,10 +236,12 @@ async def execute_agent_loop(messages: list, chosen_model: str, available_tools:
             for call in tool_calls:
                 status_text = f"Utilisation de l'outil : {call.function.name}..."
                 yield f"\n*{status_text}*\n"
+                yield "\n"
                 
                 # TTS pour le statut de l'outil
                 status_audio_id = str(uuid.uuid4())
-                asyncio.create_task(pre_generate_audio(status_audio_id, status_text))
+                text_clean = clean_text_for_tts(status_text)
+                asyncio.create_task(pre_generate_audio(status_audio_id, text_clean))
                 yield f"||AUDIO_ID:{status_audio_id}||"
 
                 # Appel réel de l'outil via ton module tools
