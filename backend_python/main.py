@@ -28,6 +28,8 @@ async def lifespan(app: FastAPI):
     print("💤 Extinction...")
 
 # Au début de main.py
+# Dans ton fichier principal
+
 
 if not os.path.exists("memory"):
     os.makedirs("memory")
@@ -63,15 +65,22 @@ async def run_jean_heude_logic(text_content: str, session_id: int | None):
             "INSERT INTO memory_chat (role, content, timestamp, sessionID) VALUES (?, ?, datetime('now'), ?)",
             ("user", text_content, session_id)
         )
+        cursor = await db.execute( 
+            "SELECT role, content FROM memory_chat WHERE sessionID = ? ORDER BY timestamp DESC LIMIT 10",
+            (session_id,)
+        )
+        lignes= await cursor.fetchall()
         await db.commit()
         print(f"💾 Sauvegarde User : {text_content}")
 
+        contexte_message = [{"role" : m[0], "content": m[1] }for m in reversed(lignes)]
+
     # 3. Sélection du modèle et génération
-    chosen_model = await memory.decide_model(text_content)
+    chosen_model = await memory.decide_model(contexte_message)
 
     async def generate():
         full_text = ""
-        async for chunk in memory.chat_with_memories(text_content, chosen_model):
+        async for chunk in memory.chat_with_memories(contexte_message, chosen_model):
             yield chunk
             if "¶" not in chunk: # On ignore les pensées pour la DB
                 full_text += chunk

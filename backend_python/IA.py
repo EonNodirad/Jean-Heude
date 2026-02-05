@@ -84,7 +84,7 @@ class Orchestrator:
         enriched_models = []
 
         # 1. Filtrage des modèles non-conversationnels
-        blacklist = ["embed", "classification", "rerank", "vision"]
+        blacklist = ["embed", "classification", "rerank", "vision","deepcoder:14b"]
         for m in all_models:
             if any(word in m.lower() for word in blacklist):
                 continue
@@ -99,6 +99,7 @@ class Orchestrator:
         # 2. Construction de la "Carte des Modèles" pour le Routeur
         models_map = ""
         for m in enriched_models:
+            print(m['name'])
             models_map += f"- {m['name']} | Taille: {m['size']} | Pensée: {m['can_think']} | Outils: {m['can_use_tools']}\n"
 
         # 3. Prompt de décision
