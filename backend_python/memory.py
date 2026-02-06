@@ -12,6 +12,7 @@ import asyncio
 import re
 
 import httpx
+import time
 
 audio_store ={}
 
@@ -28,6 +29,25 @@ client = AsyncClient(host=remote_host)
 model = "phi3:mini"
     
 _available_tools = None
+
+async def cleanup_audio_store():
+    """Nettoie les audios vieux de plus de 5 minutes toutes les minutes"""
+    while True:
+        try:
+            await asyncio.sleep(60) # On vérifie toutes les minutes
+            now = time.time()
+            to_delete = []
+        
+            for audio_id, entry in audio_store.items():
+                if now - entry.get("created_at", 0) > 300: # 300 secondes = 5 min
+                    to_delete.append(audio_id)
+        
+            for audio_id in to_delete:
+                print(f"🧹 Nettoyage automatique de l'audio expiré : {audio_id}")
+                audio_store.pop(audio_id, None)
+        except Exception as e :
+            print(f"Erreur lors du cleanup : {e}")
+
 
 def clean_text_for_tts(text):
     # 1. Supprime les URL (ça tue le temps de calcul)
@@ -96,19 +116,31 @@ async def decide_model(message:str):
     print(f"--- 🎯 Décision : {chosen_model} ---")
     return chosen_model
 
+def prepare_audio_slot():
+    """Réserve une place dans le store et retourne l'ID et l'événement"""
+    audio_id = str(uuid.uuid4())
+    event = asyncio.Event()
+    # On initialise tout de suite : l'ID existe désormais dans le dictionnaire
+    audio_store[audio_id] = {
+        "data": None, 
+        "event": event,
+        "status": "pending",
+        "created_at" : time.time()
+    }
+    return audio_id, event
 async def pre_generate_audio(audio_id, text):
     try:
         response = await http_client.post(TTS_SERVER_URL, json={"text": text})
-            
         if response.status_code == 200:
-                # On stocke le binaire reçu dans ton audio_store habituel
-            audio_store[audio_id] = io.BytesIO(response.content)
-            print(f"✅ Audio {audio_id} généré par le service TTS et mis en cache")
+            audio_store[audio_id]["data"] = io.BytesIO(response.content)
+            audio_store[audio_id]["status"] = "ready"
         else:
-            print(f"❌ Erreur serveur TTS distant : {response.status_code}")
-                
+            audio_store[audio_id]["status"] = "error"
     except Exception as e:
-        print(f"❌ Erreur de liaison avec le service TTS: {e}")
+        audio_store[audio_id]["status"] = "error"
+    finally:
+        # Quoi qu'il arrive, on libère le verrou pour que le client ne reste pas bloqué
+        audio_store[audio_id]["event"].set()
         
 async def chat_with_memories(history: list, chosen_model: str, user_id: str = "default_user") -> AsyncGenerator[str,Any]:
     # 1. Initialisation et récupération de la mémoire
@@ -214,7 +246,7 @@ async def execute_agent_loop(messages: list, chosen_model: str, available_tools:
                     buffer_audio += text_chunk
                     if any(p in text_chunk for p in [".", "!", "?", "\n", ";", ","]) or len(buffer_audio) > 40:
                         if len(buffer_audio.strip()) > 5:
-                            audio_id = str(uuid.uuid4())
+                            audio_id, _ = prepare_audio_slot()
                             phrase = clean_text_for_tts(buffer_audio)
                             asyncio.create_task(pre_generate_audio(audio_id, phrase))
                             yield f"||AUDIO_ID:{audio_id}||"
@@ -239,7 +271,7 @@ async def execute_agent_loop(messages: list, chosen_model: str, available_tools:
                 yield "\n"
                 
                 # TTS pour le statut de l'outil
-                status_audio_id = str(uuid.uuid4())
+                status_audio_id, _ = prepare_audio_slot()
                 text_clean = clean_text_for_tts(status_text)
                 asyncio.create_task(pre_generate_audio(status_audio_id, text_clean))
                 yield f"||AUDIO_ID:{status_audio_id}||"
@@ -256,8 +288,9 @@ async def execute_agent_loop(messages: list, chosen_model: str, available_tools:
 
         # Gestion du reliquat audio à la fin
         if buffer_audio.strip():
-            final_audio_id = str(uuid.uuid4())
-            asyncio.create_task(pre_generate_audio(final_audio_id, buffer_audio.strip()))
+            final_audio_id, _ = prepare_audio_slot()
+            phrase = clean_text_for_tts(buffer_audio.strip())
+            asyncio.create_task(pre_generate_audio(final_audio_id, phrase))
             yield f"||AUDIO_ID:{final_audio_id}||"
 
     except Exception as e:

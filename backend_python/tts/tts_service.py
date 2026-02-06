@@ -1,6 +1,7 @@
 from kokoro_onnx import Kokoro
 import io
 import wave
+import re
 import numpy as np
 from fastapi import FastAPI, Body
 import asyncio
@@ -30,6 +31,24 @@ class TTSService:
         
         buffer.seek(0)
         return buffer
+    async def stream_tts(self, text: str):
+        # On découpe le texte par phrases pour générer par petits morceaux
+        # On utilise une regex pour garder la ponctuation
+        sentences = re.split(r'(?<=[.!?]) +', text)
+        
+        for sentence in sentences:
+            if not sentence.strip(): continue
+            
+            # On génère le morceau de samples
+            # Note: Kokoro est synchrone, on le garde dans un thread pour ne pas bloquer l'event loop
+            loop = asyncio.get_running_loop()
+            samples, sample_rate = await loop.run_in_executor(None, self.kokoro.create, sentence, self.voice, 1.1, "fr-fr")
+            
+            # Conversion en int16
+            audio_int16 = (samples * 32767).astype(np.int16).tobytes()
+            
+            # On envoie les octets bruts (sans header WAV pour chaque morceau)
+            yield audio_int16
 
 tts = TTSService()
 @app.post("/generate")
@@ -37,18 +56,17 @@ tts = TTSService()
 async def return_audio(payload: dict = Body(...)):
     start_time = time.time()
     text = payload.get("text", "")
-    async with tts_lock:
-        start_time = time.time()
-        try:
-            loop = asyncio.get_running_loop()
-            final_buffer = await loop.run_in_executor(None, tts.generate_wav, text)
-            
-            duration = time.time() - start_time
-            print(f"⚡ Synthèse : {duration:.2f}s | Texte : {text[:30]}...")
-            return StreamingResponse(final_buffer, media_type="audio/wav")
-        except Exception as e:
-            print(f"❌ Erreur TTS : {e}")
-            return {"error": str(e)}
+
+    try:
+        duration = time.time() - start_time
+        print(f"⚡ Synthèse : {duration:.2f}s | Texte : {text[:30]}...")
+        return StreamingResponse(
+        tts.stream_tts(text), 
+        media_type="audio/pcm"
+    )
+    except Exception as e:
+        print(f"❌ Erreur TTS : {e}")
+        return {"error": str(e)}
     
     
 if __name__ == "__main__":

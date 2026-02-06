@@ -24,48 +24,58 @@ const ACTIONS = [
 	}
 ];
 export async function handleStream(
-	reader: ReadableStreamDefaultReader<Uint8Array<ArrayBuffer>>,
+	reader: ReadableStreamDefaultReader<Uint8Array>,
 	updateCallback: (thinking: string, response: string, status: string) => void
 ) {
-	currentThinking = '';
-	currentResponse = '';
+	let streamBuffer = '';
 	const decoder = new TextDecoder();
-	let lastStatus = 'Analyse de la demande...';
+	const processedAudioIds = new Set();
+	let lastStatus = 'Analyse...';
 
 	while (true) {
-		const result = await reader?.read();
-		if (!result || result.done) break;
+		const result = await reader.read();
+		if (result.done) break;
 
-		const rep = decoder.decode(result.value, { stream: true });
+		streamBuffer += decoder.decode(result.value, { stream: true });
 
-		// --- 1. DÉTECTION DU TICKET AUDIO (Nouveau système) ---
-		if (rep.includes('||AUDIO_ID:')) {
-			const match = rep.match(/\|\|AUDIO_ID:(.*?)\|\|/);
-			if (match) {
-				const audioId = match[1];
-				audioQueue.add(audioId); // On lance le pré-chargement immédiat
+		// 1. Extraction des IDs Audio (on ne change pas ce qui marche)
+		const regex = /\|\|AUDIO_ID:(.*?)\|\|/g;
+		let match;
+		while ((match = regex.exec(streamBuffer)) !== null) {
+			const audioId = match[1];
+			if (!processedAudioIds.has(audioId)) {
+				audioQueue.add(audioId);
+				processedAudioIds.add(audioId);
 			}
 		}
 
-		// --- 2. NETTOYAGE DU TEXTE (Pour ne pas afficher les IDs à l'écran) ---
-		const cleanRep = rep.replace(/\|\|AUDIO_ID:.*?\|\|/g, '');
+		// 2. Séparation Pensée / Réponse
+		// On nettoie les tags IDs pour ne pas polluer l'affichage
+		const cleanFullText = streamBuffer.replace(/\|\|AUDIO_ID:.*?\|\|/g, '');
 
-		if (cleanRep.includes('¶')) {
-			const cleanText = cleanRep.replace(/[¶]/g, '');
-			currentThinking += cleanText;
+		// On découpe par le caractère spécial ¶
+		const parts = cleanFullText.split('¶');
 
-			for (const action of ACTIONS) {
-				if (
-					action.detect.some((keyword: string) => currentThinking.toLowerCase().includes(keyword))
-				) {
-					lastStatus = `${action.label}`;
-				}
-			}
-			updateCallback(currentThinking, currentResponse, lastStatus);
+		let thinking = '';
+		let response = '';
+
+		if (parts.length > 1) {
+			// S'il y a des ¶, tout ce qui est avant le dernier ¶ est de la pensée
+			// (L'IA peut envoyer plusieurs blocs de pensée)
+			response = parts.pop() || ''; // Le dernier élément après le dernier ¶
+			thinking = parts.join(' ').replace(/[¶]/g, ''); // Tout le reste
 		} else {
-			// On ajoute le texte nettoyé à la réponse
-			currentResponse += cleanRep;
-			updateCallback(currentThinking, currentResponse, 'réponse finalisée');
+			// S'il n'y a pas (ou plus) de ¶, tout est de la réponse
+			response = parts[0];
 		}
-	} // <--- FIN DE LA BOUCLE WHILE
+
+		// 3. Mise à jour du Status (optionnel)
+		for (const action of ACTIONS) {
+			if (action.detect.some(k => thinking.toLowerCase().includes(k))) {
+				lastStatus = action.label;
+			}
+		}
+
+		updateCallback(thinking, response, lastStatus);
+	}
 }
