@@ -3,20 +3,25 @@ import { env } from '$env/dynamic/public';
 class AudioQueue {
 	// On ne stocke plus des IDs, mais des URLs déjà téléchargées (Blobs)
 	private readyToPlayQueue: string[] = [];
-	private isPlaying = false;
+	public isPlaying = false;
+	public isBuffering = false;
 	private audio: HTMLAudioElement | null = null;
+	private abortController: AbortController | null = null;
 
 	// 1. Dés qu'un ID arrive, on lance le fetch SANS ATTENDRE
 	add = async (audioId: string) => {
+		if (!this.isPlaying) this.isBuffering = true;
 		console.log(`%c📡 [Stream] ID reçu: ${audioId} -> Téléchargement lancé`, 'color: #e7644f;');
-
+		if (this.abortController === null) {
+			this.abortController = new AbortController();
+		}
 		// On lance le fetch en arrière-plan
 		this.fetchAndBuffer(audioId);
 	};
 
 	private fetchAndBuffer = async (audioId: string) => {
 		const start = performance.now();
-		const url = await this.fetchWithRetry(audioId);
+		const url = await this.downloadAudio(audioId);
 
 		if (url) {
 			console.log(
@@ -32,23 +37,51 @@ class AudioQueue {
 		}
 	};
 
-	private fetchWithRetry = async (audioId: string, retries = 10): Promise<string> => {
-		for (let i = 0; i < retries; i++) {
-			try {
-				const response = await fetch(`${env.PUBLIC_URL_SERVEUR_PYTHON}/api/tts/${audioId}`);
-				if (response.ok && response.headers.get('content-type')?.includes('audio')) {
-					const blob = await response.blob();
-					return URL.createObjectURL(blob);
-				}
-			} catch {
-				/* ignore */
+	private downloadAudio = async (audioId: string): Promise<string> => {
+		try {
+			if (!this.abortController) {
+				this.abortController = new AbortController();
 			}
-			await new Promise((r) => setTimeout(r, 100)); // Polling rapide
+			const response = await fetch(`${env.PUBLIC_URL_SERVEUR_PYTHON}/api/tts/${audioId}`, { signal: this.abortController.signal });
+
+			if (!response.ok) {
+				console.error(`❌ Erreur serveur (${response.status}) pour l'ID ${audioId}`);
+				return '';
+			}
+			const contentType = response.headers.get('content-type');
+
+			if (contentType && contentType.includes('application/json')) {
+				const errorData = await response.json();
+				console.error("❌ Le serveur a renvoyé une erreur JSON :", errorData);
+				return '';
+			}
+
+			if (!contentType || !contentType.includes('audio')) {
+				console.error("❌ Format reçu invalide :", contentType);
+				return '';
+			}
+
+			const blob = await response.blob();
+			return URL.createObjectURL(blob);
+		} catch (error: any) {
+			if (error.name === "AbortError") {
+				console.log("requête annulé")
+			} else {
+				console.error("📡 Erreur réseau :", error);
+			}
+			return '';
 		}
-		return '';
 	};
 
 	private playNext = () => {
+		if (this.readyToPlayQueue.length === 0) {
+			this.isPlaying = false;
+			this.isBuffering = false; // On arrête de bufferiser si c'est vide
+			return;
+		}
+
+		this.isBuffering = false; // Dès qu'on joue, on ne bufferise plus
+		this.isPlaying = true
 		if (this.readyToPlayQueue.length === 0) {
 			this.isPlaying = false;
 			return;
@@ -67,6 +100,9 @@ class AudioQueue {
 	};
 
 	stop = () => {
+		this.isBuffering = false;
+		this.abortController?.abort()
+		this.abortController = null;
 		if (this.audio) {
 			this.audio.pause();
 			this.audio = null;

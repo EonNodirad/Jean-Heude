@@ -6,7 +6,7 @@ import os
 import httpx
 import memory
 import aiosqlite
-import io
+import re
 import asyncio
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
@@ -23,6 +23,7 @@ async def lifespan(app: FastAPI):
     await memory.get_tools()  
     memory.get_memory()
     print("✅ Jean-Heude est prêt !")
+    asyncio.create_task(memory.cleanup_audio_store())
     yield
     # --- PHASE DE FERMETURE ---
     print("💤 Extinction...")
@@ -82,8 +83,9 @@ async def run_jean_heude_logic(text_content: str, session_id: int | None):
         full_text = ""
         async for chunk in memory.chat_with_memories(contexte_message, chosen_model):
             yield chunk
-            if "¶" not in chunk: # On ignore les pensées pour la DB
-                full_text += chunk
+            clean_chunk = re.sub(r'\|\|AUDIO_ID:.*?\|\|', '', chunk)
+            if not clean_chunk.startswith("¶"): # On garde ta logique pour les pensées
+                assistant_final_text += clean_chunk
         
         # 4. Sauvegarde finale de la réponse assistant
         if full_text.strip():
@@ -127,15 +129,24 @@ async def get_history(session_id: int):
 @app.get("/api/tts/{audio_id}")
 
 async def get_tts(audio_id:str):
-    for _ in range(750):
-        if audio_id in memory.audio_store:
-            data = memory.audio_store.pop(audio_id) # On récupère et on vide pour la mémoireS
-            data.seek(0)
-            if isinstance(data, io.BytesIO):
-                return StreamingResponse(data, media_type="audio/wav")
-            return StreamingResponse(data, media_type="audio/wav")
-        await asyncio.sleep(0.02)
-    return {"error": "Not ready yet"}
+    if audio_id not in memory.audio_store:
+        return {"error": "ID inconnu"}, 404
+    
+    try:
+        entry = memory.audio_store[audio_id]
+        await asyncio.wait_for(entry["event"].wait(), timeout=30.0)
+
+        audio_entry = memory.audio_store.pop(audio_id)
+        data = audio_entry["data"]
+
+        if data is None:
+            return {"error": "Échec de génération"}, 500
+        
+        data.seek(0)
+        return StreamingResponse(data, media_type="audio/wav")
+    
+    except asyncio.TimeoutError:
+        return {"error": "Le TTS est trop lent, abandon."}, 504
 
 @app.post("/stt")
 async def voice_endpoint(
