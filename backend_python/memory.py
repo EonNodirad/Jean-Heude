@@ -130,12 +130,27 @@ def prepare_audio_slot():
     return audio_id, event
 async def pre_generate_audio(audio_id, text):
     try:
-        response = await http_client.post(TTS_SERVER_URL, json={"text": text})
-        if response.status_code == 200:
-            audio_store[audio_id]["data"] = io.BytesIO(response.content)
-            audio_store[audio_id]["status"] = "ready"
-        else:
-            audio_store[audio_id]["status"] = "error"
+        # 1. On prépare le terrain
+        event = asyncio.Event()
+        # On va utiliser une liste pour accumuler les chunks
+        audio_store[audio_id] = {"chunks": [], "event": event, "status": "streaming"}
+
+        # 2. On ouvre le flux vers le serveur TTS
+        async with http_client.stream("POST", TTS_SERVER_URL, json={"text": text}) as response:
+            if response.status_code == 200:
+                first_chunk = True
+                async for chunk in response.aiter_bytes():
+                    audio_store[audio_id]["chunks"].append(chunk)
+                    
+                    if first_chunk:
+                        # DÈS LE PREMIER CHUNK, on réveille le client !
+                        audio_store[audio_id]["event"].set()
+                        first_chunk = False
+                
+                audio_store[audio_id]["status"] = "done"
+            else:
+                audio_store[audio_id]["status"] = "error"
+                audio_store[audio_id]["event"].set() # On libère pour envoyer l'erreur
     except Exception as e:
         audio_store[audio_id]["status"] = "error"
     finally:
