@@ -9,7 +9,7 @@
 	import { handleStream } from '$lib/lecture_reponse';
 	import { createRecorder } from '$lib/voice.svelte';
 	import micro from '$lib/assets/les-ondes-radio.png';
-	import { audioQueue } from '$lib/TTS';
+	import { audioQueue } from '$lib/TTS.svelte';
 
 	let messages = $state([
 		{

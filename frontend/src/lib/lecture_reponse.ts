@@ -1,4 +1,4 @@
-import { audioQueue } from '$lib/TTS';
+import { audioQueue } from '$lib/TTS.svelte';
 
 let currentThinking = '';
 let currentResponse = '';
@@ -27,6 +27,7 @@ export async function handleStream(
 	reader: ReadableStreamDefaultReader<Uint8Array>,
 	updateCallback: (thinking: string, response: string, status: string) => void
 ) {
+	audioQueue.stop();
 	let streamBuffer = '';
 	const decoder = new TextDecoder();
 	const processedAudioIds = new Set();

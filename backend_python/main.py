@@ -80,7 +80,7 @@ async def run_jean_heude_logic(text_content: str, session_id: int | None):
     chosen_model = await memory.decide_model(contexte_message)
 
     async def generate():
-        full_text = ""
+        assistant_final_text = ""
         async for chunk in memory.chat_with_memories(contexte_message, chosen_model):
             yield chunk
             clean_chunk = re.sub(r'\|\|AUDIO_ID:.*?\|\|', '', chunk)
@@ -88,11 +88,11 @@ async def run_jean_heude_logic(text_content: str, session_id: int | None):
                 assistant_final_text += clean_chunk
         
         # 4. Sauvegarde finale de la réponse assistant
-        if full_text.strip():
+        if assistant_final_text.strip():
             async with aiosqlite.connect("memory/memoire.db") as db_final:
                 await db_final.execute(
                     "INSERT INTO memory_chat (role, content, timestamp, sessionID) VALUES (?, ?, datetime('now'), ?)",
-                    ("assistant", full_text, session_id)
+                    ("assistant", assistant_final_text, session_id)
                 )
                 await db_final.commit()
                 print("✅ Réponse assistant sauvegardée.")
@@ -134,17 +134,27 @@ async def get_tts(audio_id:str):
     
     try:
         entry = memory.audio_store[audio_id]
-        await asyncio.wait_for(entry["event"].wait(), timeout=30.0)
 
-        audio_entry = memory.audio_store.pop(audio_id)
-        data = audio_entry["data"]
-
-        if data is None:
-            return {"error": "Échec de génération"}, 500
+        async def chunk_generator():
+            await entry["event"].wait()
+            chunk_index = 0
+            while True:
+            # S'il y a de nouveaux chunks, on les envoie
+                while chunk_index < len(entry["chunks"]):
+                    yield entry["chunks"][chunk_index]
+                    chunk_index += 1
+            
+            # Si la génération est terminée, on s'arrête
+                if entry["status"] == "done" and chunk_index >= len(entry["chunks"]):
+                    break
+                
+            # Sinon on attend un peu le prochain morceau
+                await asyncio.sleep(0.01)
         
-        data.seek(0)
-        return StreamingResponse(data, media_type="audio/wav")
-    
+        # Optionnel : nettoyer le store ici ou via le cleanup global
+            #memory.audio_store.pop(audio_id, None)
+
+        return StreamingResponse(chunk_generator(), media_type="application/octet-stream")
     except asyncio.TimeoutError:
         return {"error": "Le TTS est trop lent, abandon."}, 504
 
