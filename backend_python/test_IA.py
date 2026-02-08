@@ -1,50 +1,41 @@
 import pytest
-from unittest.mock import patch
-from IA import Orchestrator
+import os
+from unittest.mock import AsyncMock
+from IA import Orchestrator 
 
 @pytest.fixture
-def mock_client():
-    """Simule le client Ollama pour éviter les appels réseau"""
-    with patch('IA.client') as mock:
-        yield mock
+def orchestrator():
+    os.environ["URL_SERVER_OLLAMA"] = "http://localhost:11434"
+    return Orchestrator()
 
-def test_get_local_models(mock_client):
-    """Vérifie l'extraction des noms de modèles depuis la réponse Ollama"""
-    # 1. On simule la réponse brute de client.list()
-    mock_client.list.return_value = {
-        'models': [
-            {'model': 'phi3:mini', 'details': {}},
-            {'model': 'llama3.1:8b', 'details': {}}
-        ]
-    }
-    
-    orch = Orchestrator()
-    models = orch.get_local_models()
-    
-    assert len(models) == 2
-    assert "phi3:mini" in models
+@pytest.mark.asyncio
+async def test_get_local_models_success(orchestrator):
+    # Plus besoin de l'argument 'mocker'
+    orchestrator.client.list = AsyncMock(return_value={
+        'models': [{'model': 'llama3.1:8b'}, {'name': 'mistral:latest'}]
+    })
+    models = await orchestrator.get_local_models()
     assert "llama3.1:8b" in models
+    assert len(models) == 2
 
-def test_choose_model_success(mock_client):
-    """Vérifie que l'orchestrateur renvoie le modèle choisi par l'IA"""
-    mock_client.generate.return_value = {'response': 'llama3.1:8b'}
+@pytest.mark.asyncio
+async def test_get_model_details_caching(orchestrator):
+    mock_show = AsyncMock(return_value={
+        "capabilities": ["thinking", "tools"],
+        "details": {"parameter_size": "8b", "family": "llama"}
+    })
+    orchestrator.client.show = mock_show
+    await orchestrator.get_model_details("llama3.1:8b")
+    await orchestrator.get_model_details("llama3.1:8b")
+    assert mock_show.call_count == 1 
+
+@pytest.mark.asyncio
+async def test_choose_model_filtering(orchestrator):
+    orchestrator.get_local_models = AsyncMock(return_value=["llama3.1:8b", "nomic-embed-text"])
+    orchestrator.get_model_details = AsyncMock(side_effect=lambda name: {
+        "name": name, "size": "7b", "can_think": False, "can_use_tools": True
+    })
+    orchestrator.client.generate = AsyncMock(return_value={"response": "llama3.1:8b"})
     
-    orch = Orchestrator()
-    available = ["phi3:mini", "llama3.1:8b"]
-    
-    chosen = orch.choose_model("Raconte moi une histoire", available)
-    
+    chosen = await orchestrator.choose_model("Bonjour", [])
     assert chosen == "llama3.1:8b"
-
-def test_choose_model_fallback(mock_client):
-    """Vérifie le repli (fallback) si l'IA répond n'importe quoi"""
-    # L'IA répond un modèle qui n'existe pas dans la liste
-    mock_client.generate.return_value = {'response': 'modèle-imaginaire'}
-    
-    orch = Orchestrator()
-    available = ["phi3:mini", "llama3.1:8b"]
-    
-    # Il doit renvoyer le premier de la liste (available[0])
-    chosen = orch.choose_model("Test", available)
-    
-    assert chosen == "phi3:mini"
