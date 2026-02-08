@@ -1,5 +1,3 @@
-import { env } from '$env/dynamic/public';
-
 class AudioQueue {
 	private audioCtx: AudioContext | null = null;
 	private nextStartTime: number = 0;
