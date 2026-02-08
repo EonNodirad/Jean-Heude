@@ -19,6 +19,7 @@ mcp_servers:
     args:
       - "-y"
       - "@modelcontextprotocol/server-wikipedia"
+
   # Tu peux ajouter tes propres scripts Python ici aussi
   # mon-outil-perso:
   #   command: "python"

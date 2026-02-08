@@ -9,6 +9,7 @@
 	import { handleStream } from '$lib/lecture_reponse';
 	import { createRecorder } from '$lib/voice.svelte';
 	import micro from '$lib/assets/les-ondes-radio.png';
+	import { audioQueue } from '$lib/TTS.svelte';
 
 	let messages = $state([
 		{
@@ -172,8 +173,12 @@
 							<details open={!msg.content}>
 								<summary class="status-summary">
 									<div class="status-indicator">
-										{#if !msg.content}<span class="pulse-dot"></span>{/if}
-										{msg.status || 'Jean-Heude réfléchit...'}
+										<span class="pulse-dot"></span>
+										{#if audioQueue.isBuffering && !audioQueue.isPlaying}
+											Synthèse vocale en cours...
+										{:else}
+											{msg.status || 'Jean-Heude réfléchit...'}
+										{/if}
 									</div>
 								</summary>
 								<div class="thinking-content">
