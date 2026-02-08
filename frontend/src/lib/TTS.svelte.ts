@@ -1,5 +1,3 @@
-import { env } from '$env/dynamic/public';
-
 class AudioQueue {
 	private audioCtx: AudioContext | null = null;
 	private nextStartTime: number = 0;
@@ -38,7 +36,7 @@ class AudioQueue {
 				'color: #fbbf24'
 			);
 
-			const response = await fetch(`${env.PUBLIC_URL_SERVEUR_PYTHON}/api/tts/${audioId}`);
+			const response = await fetch(`/api/tts/${audioId}`);
 			const reader = response.body?.getReader();
 			if (!reader) return;
 

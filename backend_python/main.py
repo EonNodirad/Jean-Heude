@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 load_dotenv()
 STT_SERVER_URL = os.getenv("STT_SERVER_URL")
+FRONTEND_URL = os.getenv("FRONTEND_URL")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- PHASE DE DÉMARRAGE ---
@@ -39,7 +40,7 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"], # L'URL de ton site Svelte
+    allow_origins=["*"], # L'URL de ton site Svelte
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
