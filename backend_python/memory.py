@@ -30,21 +30,20 @@ model = "phi3:mini"
 _available_tools = None
 
 async def cleanup_audio_store():
-    """Nettoie les audios vieux de plus de 5 minutes toutes les minutes"""
     while True:
         try:
-            await asyncio.sleep(60) # On vérifie toutes les minutes
+            await asyncio.sleep(60)
             now = time.time()
             to_delete = []
         
             for audio_id, entry in audio_store.items():
-                if now - entry.get("created_at", 0) > 300: # 300 secondes = 5 min
+                # On ne supprime que si c'est vieux ET que ce n'est pas en train de streamer
+                if now - entry.get("created_at", 0) > 300 and entry.get("status") != "streaming":
                     to_delete.append(audio_id)
         
             for audio_id in to_delete:
-                print(f"🧹 Nettoyage automatique de l'audio expiré : {audio_id}")
                 audio_store.pop(audio_id, None)
-        except Exception as e :
+        except Exception as e:
             print(f"Erreur lors du cleanup : {e}")
 
 
@@ -129,33 +128,43 @@ def prepare_audio_slot():
     return audio_id, event
 async def pre_generate_audio(audio_id, text):
     try:
-        # 1. On prépare le terrain
-        event = asyncio.Event()
-        # On va utiliser une liste pour accumuler les chunks
-        audio_store[audio_id] = {"chunks": [], "event": event, "status": "streaming"}
+        # On récupère l'entrée existante au lieu de la recréer
+        entry = audio_store.get(audio_id)
+        if not entry:
+            print(f"⚠️ Audio {audio_id} déjà supprimé avant le début.")
+            return
 
-        # 2. On ouvre le flux vers le serveur TTS
+        # On met à jour sans écraser le timestamp 'created_at'
+        entry.update({"chunks": [], "status": "streaming"})
+
         async with http_client.stream("POST", TTS_SERVER_URL, json={"text": text}) as response:
             if response.status_code == 200:
                 first_chunk = True
                 async for chunk in response.aiter_bytes():
+                    # Sécurité : on vérifie que l'ID n'a pas été nettoyé entre deux chunks
+                    if audio_id not in audio_store:
+                        print(f"🛑 Stream interrompu : {audio_id} a été nettoyé.")
+                        break
+                        
                     audio_store[audio_id]["chunks"].append(chunk)
                     
                     if first_chunk:
-                        # DÈS LE PREMIER CHUNK, on réveille le client !
                         audio_store[audio_id]["event"].set()
                         first_chunk = False
                 
-                audio_store[audio_id]["status"] = "done"
+                if audio_id in audio_store:
+                    audio_store[audio_id]["status"] = "done"
             else:
-                audio_store[audio_id]["status"] = "error"
-                audio_store[audio_id]["event"].set() # On libère pour envoyer l'erreur
-    except Exception:
-        audio_store[audio_id]["status"] = "error"
+                if audio_id in audio_store:
+                    audio_store[audio_id]["status"] = "error"
+    except Exception as e:
+        print(f"Erreur TTS : {e}")
+        if audio_id in audio_store:
+            audio_store[audio_id]["status"] = "error"
     finally:
-        # Quoi qu'il arrive, on libère le verrou pour que le client ne reste pas bloqué
-        audio_store[audio_id]["event"].set()
-        
+        if audio_id in audio_store:
+            audio_store[audio_id]["event"].set()
+
 async def chat_with_memories(history: list, chosen_model: str, user_id: str = "default_user") -> AsyncGenerator[str,Any]:
     # 1. Initialisation et récupération de la mémoire
     print("début mémoire")
