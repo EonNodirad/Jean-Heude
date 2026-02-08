@@ -6,7 +6,7 @@ import os
 import httpx
 import memory
 import aiosqlite
-import io
+import re
 import asyncio
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
@@ -20,14 +20,17 @@ async def lifespan(app: FastAPI):
         await db.execute("CREATE TABLE IF NOT EXISTS memory_chat (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT, timestamp TIMESTAMP, sessionID INTEGER)")
         await db.execute("CREATE TABLE IF NOT EXISTS historique_chat (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TIMESTAMP, resume TEXT, userID TEXT)")
         await db.commit()
-    await memory.get_tools()     # On charge les outils en RAM
+    await memory.get_tools()  
     memory.get_memory()
     print("✅ Jean-Heude est prêt !")
+    asyncio.create_task(memory.cleanup_audio_store())
     yield
     # --- PHASE DE FERMETURE ---
     print("💤 Extinction...")
 
 # Au début de main.py
+# Dans ton fichier principal
+
 
 if not os.path.exists("memory"):
     os.makedirs("memory")
@@ -63,25 +66,33 @@ async def run_jean_heude_logic(text_content: str, session_id: int | None):
             "INSERT INTO memory_chat (role, content, timestamp, sessionID) VALUES (?, ?, datetime('now'), ?)",
             ("user", text_content, session_id)
         )
+        cursor = await db.execute( 
+            "SELECT role, content FROM memory_chat WHERE sessionID = ? ORDER BY timestamp DESC LIMIT 10",
+            (session_id,)
+        )
+        lignes= await cursor.fetchall()
         await db.commit()
         print(f"💾 Sauvegarde User : {text_content}")
 
+        contexte_message = [{"role" : m[0], "content": m[1] }for m in reversed(lignes)]
+
     # 3. Sélection du modèle et génération
-    chosen_model = memory.decide_model(text_content)
+    chosen_model = await memory.decide_model(contexte_message)
 
     async def generate():
-        full_text = ""
-        async for chunk in memory.chat_with_memories(text_content, chosen_model):
+        assistant_final_text = ""
+        async for chunk in memory.chat_with_memories(contexte_message, chosen_model):
             yield chunk
-            if "¶" not in chunk: # On ignore les pensées pour la DB
-                full_text += chunk
+            clean_chunk = re.sub(r'\|\|AUDIO_ID:.*?\|\|', '', chunk)
+            if not clean_chunk.startswith("¶"): # On garde ta logique pour les pensées
+                assistant_final_text += clean_chunk
         
         # 4. Sauvegarde finale de la réponse assistant
-        if full_text.strip():
+        if assistant_final_text.strip():
             async with aiosqlite.connect("memory/memoire.db") as db_final:
                 await db_final.execute(
                     "INSERT INTO memory_chat (role, content, timestamp, sessionID) VALUES (?, ?, datetime('now'), ?)",
-                    ("assistant", full_text, session_id)
+                    ("assistant", assistant_final_text, session_id)
                 )
                 await db_final.commit()
                 print("✅ Réponse assistant sauvegardée.")
@@ -118,15 +129,34 @@ async def get_history(session_id: int):
 @app.get("/api/tts/{audio_id}")
 
 async def get_tts(audio_id:str):
-    for _ in range(750):
-        if audio_id in memory.audio_store:
-            data = memory.audio_store.pop(audio_id) # On récupère et on vide pour la mémoireS
-            data.seek(0)
-            if isinstance(data, io.BytesIO):
-                return StreamingResponse(data, media_type="audio/wav")
-            return StreamingResponse(data, media_type="audio/wav")
-        await asyncio.sleep(0.02)
-    return {"error": "Not ready yet"}
+    if audio_id not in memory.audio_store:
+        return {"error": "ID inconnu"}, 404
+    
+    try:
+        entry = memory.audio_store[audio_id]
+
+        async def chunk_generator():
+            await entry["event"].wait()
+            chunk_index = 0
+            while True:
+            # S'il y a de nouveaux chunks, on les envoie
+                while chunk_index < len(entry["chunks"]):
+                    yield entry["chunks"][chunk_index]
+                    chunk_index += 1
+            
+            # Si la génération est terminée, on s'arrête
+                if entry["status"] == "done" and chunk_index >= len(entry["chunks"]):
+                    break
+                
+            # Sinon on attend un peu le prochain morceau
+                await asyncio.sleep(0.01)
+        
+        # Optionnel : nettoyer le store ici ou via le cleanup global
+            #memory.audio_store.pop(audio_id, None)
+
+        return StreamingResponse(chunk_generator(), media_type="application/octet-stream")
+    except asyncio.TimeoutError:
+        return {"error": "Le TTS est trop lent, abandon."}, 504
 
 @app.post("/stt")
 async def voice_endpoint(
