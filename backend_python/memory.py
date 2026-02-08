@@ -1,6 +1,5 @@
 
 import os
-import io
 from IA import Orchestrator
 from mem0 import Memory 
 from typing import AsyncGenerator, Any
@@ -151,7 +150,7 @@ async def pre_generate_audio(audio_id, text):
             else:
                 audio_store[audio_id]["status"] = "error"
                 audio_store[audio_id]["event"].set() # On libère pour envoyer l'erreur
-    except Exception as e:
+    except Exception:
         audio_store[audio_id]["status"] = "error"
     finally:
         # Quoi qu'il arrive, on libère le verrou pour que le client ne reste pas bloqué

@@ -37,7 +37,8 @@ class TTSService:
         sentences = re.split(r'(?<=[.!?]) +', text)
         
         for sentence in sentences:
-            if not sentence.strip(): continue
+            if not sentence.strip(): 
+                continue
             
             # On génère le morceau de samples
             # Note: Kokoro est synchrone, on le garde dans un thread pour ne pas bloquer l'event loop
