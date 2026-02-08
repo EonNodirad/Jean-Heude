@@ -1,8 +1,5 @@
 import { audioQueue } from '$lib/TTS.svelte';
 
-let currentThinking = '';
-let currentResponse = '';
-
 const ACTIONS = [
 	{
 		detect: ['recherche', 'cherche', 'google', 'duckduckgo', 'web'],
@@ -72,7 +69,7 @@ export async function handleStream(
 
 		// 3. Mise à jour du Status (optionnel)
 		for (const action of ACTIONS) {
-			if (action.detect.some(k => thinking.toLowerCase().includes(k))) {
+			if (action.detect.some((k) => thinking.toLowerCase().includes(k))) {
 				lastStatus = action.label;
 			}
 		}
