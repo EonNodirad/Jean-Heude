@@ -16,3 +16,6 @@ PyYAML
 ruff
 pytest
 pytest-asyncio
+
+
+tiktoken

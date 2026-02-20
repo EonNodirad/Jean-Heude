@@ -10,6 +10,7 @@
 	import { createRecorder } from '$lib/voice.svelte';
 	import micro from '$lib/assets/les-ondes-radio.png';
 	import { audioQueue } from '$lib/TTS.svelte';
+	import { connectGateway, sendMessage as sendWsMessage, chatState } from '$lib/websocket.svelte';
 
 	let messages = $state([
 		{
@@ -58,69 +59,88 @@
 		},
 		onSessionCreated: (id) => (sessionActive = id)
 	});
+
 	onMount(async () => {
 		await rafraichirSession();
+		connectGateway('noeda_pc');
 	});
+
+	$effect(() => {
+		// 1. Mise à jour en temps réel (le WebSocket s'occupe déjà de trier le texte)
+		if (chatState.isThinking && messages[0].role === 'assistant') {
+			messages[0].think = chatState.thinkStream;
+			messages[0].content = chatState.contentStream;
+
+			// Gestion dynamique du petit statut qui s'affiche
+			if (chatState.contentStream.length > 0) {
+				messages[0].status = 'Génération de la réponse...';
+			} else {
+				messages[0].status = 'Jean-Heude réfléchit...';
+			}
+		}
+
+		// 2. Gestion de la fin de génération
+		if (chatState.doneTrigger > 0) {
+			attente = false;
+			if (chatState.sessionId) {
+				sessionActive = chatState.sessionId;
+			}
+			if (chatState.model) {
+				modelChoisi = chatState.model;
+				voirModel = true;
+				setTimeout(() => (voirModel = false), 3000);
+			}
+			rafraichirSession();
+			chatState.doneTrigger = 0; // Reset
+		}
+	});
+
 	async function sendMessage(e: Event) {
 		e.preventDefault();
 		if (currentMessage.trim() === '') return;
+
+		// 1. On prépare l'interface
 		attente = true;
 		messages = [{ role: 'user', think: '', content: currentMessage, status: '' }, ...messages];
 		messages = [
-			{ role: 'assistant', think: '', content: '', status: ' Je réfléchit ...' },
+			{ role: 'assistant', think: '', content: '', status: 'Je réfléchis...' },
 			...messages
 		];
-		let reponse = await fetch('/api/chat', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ content: currentMessage, session_id: sessionActive })
-		});
 
-		const session_id = reponse.headers.get('x-session-id');
-		const model_chosen = reponse.headers.get('x-chosen-model');
-
-		if (model_chosen) {
-			modelChoisi = model_chosen;
-			voirModel = true;
-
-			setTimeout(() => {
-				voirModel = false;
-			}, 3000);
-		}
-
-		if (session_id) sessionActive = parseInt(session_id);
-
-		const reader = reponse.body?.getReader();
-
-		if (reader) {
-			await handleStream(reader, (think, content, status) => {
-				messages[0].think = think;
-				messages[0].content = content;
-				messages[0].status = status;
-			});
-		}
+		// 2. On envoie le message via WebSocket
+		chatState.sessionId = sessionActive; // On s'assure que le store a le bon ID
+		sendWsMessage(currentMessage);
 
 		currentMessage = '';
-		attente = false;
-		await rafraichirSession();
 	}
+
 	async function ChargerConversation(id: number) {
 		if (attente) return;
 
 		console.log('🔵 Tentative de chargement de la session :', id);
 		sessionActive = id;
+		chatState.sessionId = id;
 
 		const res = await fetch(`api/historique/${id}`);
 		if (res.ok) {
 			const data = await res.json();
 
-			messages = [...data].reverse();
+			// SÉCURITÉ : on s'assure que think et status existent pour les anciens messages
+			messages = data
+				.map((msg: any) => ({
+					role: msg.role,
+					content: msg.content,
+					think: '',
+					status: ''
+				}))
+				.reverse();
 
 			console.log('🟢 Interface mise à jour avec', messages.length, 'messages');
 		} else {
 			console.error('🔴 Erreur serveur Python :', res.status);
 		}
 	}
+
 	async function rafraichirSession() {
 		const h = await fetch('/api/historique');
 		if (h.ok) {
