@@ -1,0 +1,9 @@
+{
+    "name": "donner_date_heure",
+    "description": "Donne l'heure et la date actuelle locale. À utiliser dès que l'utilisateur demande l'heure, la date ou le jour qu'il est.",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+    }
+}
