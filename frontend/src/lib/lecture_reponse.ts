@@ -20,26 +20,31 @@ const ACTIONS = [
 		icon: '🧠'
 	}
 ];
+
 export async function handleStream(
 	reader: ReadableStreamDefaultReader<Uint8Array>,
 	updateCallback: (thinking: string, response: string, status: string) => void
 ) {
 	audioQueue.stop();
-	let streamBuffer = '';
 	const decoder = new TextDecoder();
 	const processedAudioIds = new Set();
+
+	// On garde nos deux boîtes séparées, exactement comme le WebSocket !
+	let thinking = '';
+	let response = '';
 	let lastStatus = 'Analyse...';
 
 	while (true) {
 		const result = await reader.read();
 		if (result.done) break;
 
-		streamBuffer += decoder.decode(result.value, { stream: true });
+		// On décode UNIQUEMENT le petit morceau qui vient d'arriver
+		let chunkText = decoder.decode(result.value, { stream: true });
 
-		// 1. Extraction des IDs Audio (on ne change pas ce qui marche)
+		// 1. Extraction des IDs Audio dans ce morceau
 		const regex = /\|\|AUDIO_ID:(.*?)\|\|/g;
 		let match;
-		while ((match = regex.exec(streamBuffer)) !== null) {
+		while ((match = regex.exec(chunkText)) !== null) {
 			const audioId = match[1];
 			if (!processedAudioIds.has(audioId)) {
 				audioQueue.add(audioId);
@@ -47,33 +52,30 @@ export async function handleStream(
 			}
 		}
 
-		// 2. Séparation Pensée / Réponse
-		// On nettoie les tags IDs pour ne pas polluer l'affichage
-		const cleanFullText = streamBuffer.replace(/\|\|AUDIO_ID:.*?\|\|/g, '');
+		// On nettoie les IDs audio du morceau
+		chunkText = chunkText.replace(/\|\|AUDIO_ID:.*?\|\|/g, '');
 
-		// On découpe par le caractère spécial ¶
-		const parts = cleanFullText.split('¶');
-
-		let thinking = '';
-		let response = '';
-
-		if (parts.length > 1) {
-			// S'il y a des ¶, tout ce qui est avant le dernier ¶ est de la pensée
-			// (L'IA peut envoyer plusieurs blocs de pensée)
-			response = parts.pop() || ''; // Le dernier élément après le dernier ¶
-			thinking = parts.join(' ').replace(/[¶]/g, ''); // Tout le reste
-		} else {
-			// S'il n'y a pas (ou plus) de ¶, tout est de la réponse
-			response = parts[0];
+		// 2. LE TRI (Le cœur de la solution !)
+		// Ton backend envoie "¶" devant CHAQUE morceau de pensée.
+		if (!chunkText) {
+			// Si le morceau est totalement vide, on ne fait rien
+			continue;
+		} else if (chunkText.includes('¶') || chunkText.includes('<think>')) {
+			// C'est de la pensée ! On nettoie les symboles et on l'ajoute à la bonne boîte.
+			thinking += chunkText.replace(/¶|<\/?think>/g, '');
+		} else if (chunkText.trim() !== '') {
+			// Pas de "¶" ? C'est que c'est la réponse finale !
+			response += chunkText.replace(/<\/think>/g, '');
 		}
 
-		// 3. Mise à jour du Status (optionnel)
+		// 3. Mise à jour du Status visuel
 		for (const action of ACTIONS) {
 			if (action.detect.some((k) => thinking.toLowerCase().includes(k))) {
 				lastStatus = action.label;
 			}
 		}
 
+		// 4. On envoie les DEUX boîtes à ton affichage Svelte
 		updateCallback(thinking, response, lastStatus);
 	}
 }

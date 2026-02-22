@@ -2,6 +2,7 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
+# Installation des dépendances système et de Node.js
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
@@ -9,17 +10,20 @@ RUN apt-get update && apt-get install -y \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-
+# Installation des dépendances Python
 COPY requirements.txt .
-
 RUN pip install --no-cache-dir -r requirements.txt
 
-
-
+# Copie du code
 COPY . .
+
+# Rendre le dossier memory accessible en écriture (pour SQLite et les uploads)
 RUN chmod -R 777 /app/memory
+
+# Rendre le script de démarrage exécutable
+RUN chmod +x /app/start.sh
+
 EXPOSE 8000
 
-
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
-
+# On lance notre script qui va démarrer FastAPI + Discord + Telegram
+CMD ["/app/start.sh"]

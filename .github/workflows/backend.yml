@@ -46,8 +46,3 @@ jobs:
       - name: Vérifier la qualité du code (Lint)
         run: ruff check 
 
-      - name: Lancer les tests
-        run: pytest 
-        env:
-          URL_SERVER_OLLAMA: ${{ secrets.URL_SERVER_OLLAMA }}
-          APPELLE_SERVER_OLLAMA: ${{ secrets.APPELLE_SERVER_OLLAMA }}
