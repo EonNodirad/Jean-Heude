@@ -5,7 +5,6 @@ import re
 import os
 import tools
 import tiktoken
-from datetime import datetime
 from ollama import AsyncClient
 from functools import wraps
 
@@ -37,7 +36,7 @@ class AgentRunner:
         Génère un prompt compressé (Head + Résumé + Tail) À LA VOLÉE.
         Ne modifie AUCUNE base de données pour préserver l'UI.
         """
-        print(f"🧹 [Context Guard] Fenêtre pleine. Compaction en mémoire...")
+        print("🧹 [Context Guard] Fenêtre pleine. Compaction en mémoire...")
         
         if len(history) <= 4:
             return history
@@ -126,7 +125,7 @@ class AgentRunner:
                 # Astuce magique : On ajoute la colonne 'image' dans la table si elle n'existe pas !
                 try:
                     await db.execute("ALTER TABLE memory_chat ADD COLUMN image TEXT")
-                except:
+                except Exception:
                     pass # Si ça fait une erreur, c'est que la colonne existe déjà, on ignore.
                 
                 # NOUVEAU : On insère le prompt AVEC le chemin de l'image (image_path)

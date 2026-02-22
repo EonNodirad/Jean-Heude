@@ -10,7 +10,7 @@ from gateway import Gateway
 from agent_runner import AgentRunner
 import memory
 import aiosqlite
-import re
+
 import asyncio
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
@@ -34,7 +34,7 @@ async def watch_skills_folder():
         
     # awatch écoute les événements du système de fichiers sans bloquer le serveur !
     async for changes in awatch("skills"):
-        print(f"🔄 [Auto-Watch] Modification détectée dans les skills ! Mise à jour en cours...")
+        print("🔄 [Auto-Watch] Modification détectée dans les skills ! Mise à jour en cours...")
         await tools.sync_skills_to_qdrant()
 
 @asynccontextmanager
@@ -135,7 +135,7 @@ async def get_history(session_id: int):
         lignes = await cursor.fetchall()
         
         # On renvoie tout à Svelte, y compris l'image
-        return [{"role": l["role"], "content": l["content"], "image": l["image"]} for l in lignes]
+        return [{"role": ligne["role"], "content": ligne["content"], "image": ligne["image"]} for ligne in lignes]
 
 @app.get("/api/tts/{audio_id}")
 async def get_tts(audio_id:str):
@@ -304,7 +304,8 @@ async def multimodal_endpoint(
     async def stream_generator():
         while True:
             token = await q.get()
-            if token is None: break
+            if token is None: 
+                break
             yield token
 
     # 5. Headers pour le proxy SvelteKit

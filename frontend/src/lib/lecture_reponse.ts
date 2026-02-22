@@ -1,12 +1,24 @@
 import { audioQueue } from '$lib/TTS.svelte';
 
 const ACTIONS = [
-	{ detect: ['recherche', 'cherche', 'google', 'duckduckgo', 'web'], label: "Recherche d'informations", icon: '🔍' },
+	{
+		detect: ['recherche', 'cherche', 'google', 'duckduckgo', 'web'],
+		label: "Recherche d'informations",
+		icon: '🔍'
+	},
 	{ detect: ['calcule', 'addition', 'multipli', 'math'], label: 'Calcul mathématique', icon: '🧮' },
 	{ detect: ['heure', 'date', 'temps', 'moment'], label: "Vérification de l'heure", icon: '🕒' },
 	{ detect: ['fichier', 'lire', 'document', 'folder'], label: 'Lecture des fichiers', icon: '📁' },
-	{ detect: ['code', 'python', 'script', 'programmation'], label: 'Génération de code', icon: '💻' },
-	{ detect: ['mémoire', 'souvient', 'historique', 'utilisateur'], label: 'Consultation des souvenirs', icon: '🧠' }
+	{
+		detect: ['code', 'python', 'script', 'programmation'],
+		label: 'Génération de code',
+		icon: '💻'
+	},
+	{
+		detect: ['mémoire', 'souvient', 'historique', 'utilisateur'],
+		label: 'Consultation des souvenirs',
+		icon: '🧠'
+	}
 ];
 
 export async function handleStream(
@@ -48,8 +60,7 @@ export async function handleStream(
 		if (!chunkText) {
 			// Si le morceau est totalement vide, on ne fait rien
 			continue;
-		}
-		else if (chunkText.includes('¶') || chunkText.includes('<think>')) {
+		} else if (chunkText.includes('¶') || chunkText.includes('<think>')) {
 			// C'est de la pensée ! On nettoie les symboles et on l'ajoute à la bonne boîte.
 			thinking += chunkText.replace(/¶|<\/?think>/g, '');
 		} else if (chunkText.trim() !== '') {
