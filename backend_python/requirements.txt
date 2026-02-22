@@ -19,3 +19,7 @@ pytest-asyncio
 
 
 tiktoken
+
+watchfiles
+
+Pillow

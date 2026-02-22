@@ -3,6 +3,7 @@ import aiosqlite
 import memory
 import re
 import os
+import tools
 import tiktoken
 from datetime import datetime
 from ollama import AsyncClient
@@ -75,6 +76,72 @@ class AgentRunner:
         print("✅ [Context Guard] Compaction mémoire terminée.")
         # On retourne la liste compressée pour l'envoyer au LLM
         return compressed_history
+    async def process_multimodal_chat(self, prompt: str, image_b64: str | None,image_path: str|None, session_id: int, stream_callback):
+        print(f"⚙️ AgentRunner: Traitement multimodal pour session {session_id}")
+        
+        # 1. On charge l'historique directement depuis SQLite
+        memory_context = []
+        if session_id:
+            async with aiosqlite.connect("memory/memoire.db") as db:
+                async with db.execute("SELECT role, content FROM memory_chat WHERE sessionID = ? ORDER BY timestamp ASC LIMIT 20", (session_id,)) as cursor:
+                    lignes = await cursor.fetchall()
+                    for ligne in lignes:
+                        memory_context.append({"role": ligne[0], "content": ligne[1]})
+        
+        # 2. Le System Prompt spécifique à la vision
+        system_prompt = {
+            "role": "system",
+            "content": (
+                "Tu es Jean-Heude, un assistant personnel intelligent et capable d'analyser des images.\n"
+            )
+        }
+        
+        # 3. Message utilisateur avec l'image
+        user_message = {"role": "user", "content": prompt}
+        if image_b64:
+            user_message["images"] = [image_b64]
+            print("🖼️ Image B64 injectée avec succès pour Qwen3-VL.")
+
+        full_messages = [system_prompt] + memory_context + [user_message]
+        vision_model = "qwen3-vl:8b" 
+
+        # 4. Récupération des outils pertinents
+        relevant_tools = await tools.get_relevant_tools(prompt, limit=3)
+
+        # 5. On prépare une variable pour stocker la réponse finale de l'assistant
+        assistant_final_text = ""
+
+        async for token in memory.execute_agent_loop(full_messages, vision_model, available_tools=relevant_tools, mute_audio=True):
+            await stream_callback(token)
+            
+            # On attrape les mots au vol, on ignore la pensée (¶) et l'audio
+            clean_chunk = re.sub(r'\|\|AUDIO_ID:.*?\|\|', '', token)
+            if not clean_chunk.startswith("¶"): 
+                assistant_final_text += clean_chunk
+        
+        # 6. Sauvegarde BDD (Utilisateur ET Assistant)
+        if session_id:
+            async with aiosqlite.connect("memory/memoire.db") as db:
+                
+                # Astuce magique : On ajoute la colonne 'image' dans la table si elle n'existe pas !
+                try:
+                    await db.execute("ALTER TABLE memory_chat ADD COLUMN image TEXT")
+                except:
+                    pass # Si ça fait une erreur, c'est que la colonne existe déjà, on ignore.
+                
+                # NOUVEAU : On insère le prompt AVEC le chemin de l'image (image_path)
+                await db.execute(
+                    "INSERT INTO memory_chat (role, content, timestamp, sessionID, image) VALUES (?, ?, datetime('now'), ?, ?)",
+                    ("user", prompt, session_id, image_path)
+                )
+                
+                if assistant_final_text.strip():
+                    # L'assistant n'a pas d'image, donc on met None à la fin
+                    await db.execute(
+                        "INSERT INTO memory_chat (role, content, timestamp, sessionID, image) VALUES (?, ?, datetime('now'), ?, ?)",
+                        ("assistant", assistant_final_text.strip(), session_id, None)
+                    )
+                await db.commit()
 
     @session_guard
     async def process_chat(self, text_content: str, session_id: int | None, on_token_callback):
