@@ -6,6 +6,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from agent_runner import AgentRunner
 import html
 from telegram.constants import ParseMode
+from auth import init_auth_db, is_authorized, authorize_user, SECRET_PASSWORD
 
 # 1. Chargement du Token
 load_dotenv()
@@ -24,9 +25,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Pose-moi ta question !"
     )
 
+async def pair_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Gère la commande /pair MonMotDePasse"""
+    chat_id = update.message.chat_id
+    
+    # Sécurité : On vérifie que c'est bien un message privé
+    if update.message.chat.type != "private":
+        await update.message.reply_text("⚠️ Par mesure de sécurité, la commande /pair ne s'utilise qu'en Message Privé !")
+        return
+
+    # On récupère les arguments tapés après /pair (ex: /pair 1234 -> args = ['1234'])
+    if context.args and context.args[0] == SECRET_PASSWORD:
+        authorize_user("telegram", str(chat_id))
+        await update.message.reply_text("✅ **Authentification réussie.** Bonjour Maître. Mon système est à votre entière disposition.", parse_mode="HTML")
+    else:
+        await update.message.reply_text("❌ **Mot de passe incorrect.** Accès refusé.")
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gère les messages texte envoyés au bot"""
     chat_id = update.message.chat_id
+    if not is_authorized("telegram", str(chat_id)):
+        return # S'il n'est pas autorisé, Jean-Heude l'ignore totalement
     user_text = update.message.text
     
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
@@ -80,13 +99,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     if not TELEGRAM_TOKEN:
-        print("❌ ERREUR : TELEGRAM_BOT_TOKEN introuvable dans le .env !")
+        print("❌ ERREUR : TELEGRAM_BOT_TOKEN introuvable !")
         return
+
+    # On s'assure que la table de sécurité existe dans SQLite
+    init_auth_db() 
 
     print("🚀 Démarrage de la Gateway Telegram...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
+    # Routeurs
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("pair", pair_command)) # <--- NOUVELLE LIGNE ICI
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     print("🤖 Jean-Heude est en ligne sur Telegram ! (Ctrl+C pour arrêter)")
