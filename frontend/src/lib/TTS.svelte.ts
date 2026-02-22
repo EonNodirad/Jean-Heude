@@ -8,7 +8,7 @@ class AudioQueue {
 	public isPlaying = $state(false);
 	public isBuffering = $state(false);
 
-	private initAudioContext() {
+	public initAudioContext() {
 		if (!this.audioCtx) {
 			console.log('🔊 [AudioCtx] Initialisation du moteur...');
 			this.audioCtx = new AudioContext({

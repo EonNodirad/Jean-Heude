@@ -1,4 +1,5 @@
 import { handleStream } from '$lib/lecture_reponse';
+import { audioQueue } from '$lib/TTS.svelte';
 
 export function createRecorder(callbacks: {
 	getSessionId: () => number | null;
@@ -14,6 +15,7 @@ export function createRecorder(callbacks: {
 
 	async function start() {
 		try {
+			audioQueue.initAudioContext();
 			const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 			isRecording = true;
 			audioChunks = [];

@@ -24,7 +24,7 @@ TTS_SERVER_URL = os.getenv("TTS_SERVER_URL")
 orchestrator = Orchestrator()
 client = AsyncClient(host=remote_host)
 model = "phi3:mini"
-_available_tools = None
+
 audio_store = {}
 memory_lock = asyncio.Lock()
 
@@ -111,16 +111,11 @@ def clean_text_for_tts(text):
     text = text.replace('\n', ' ')
     return text.strip()
 
-async def get_tools():
-    global _available_tools
-    if _available_tools is None:
-        print("--- Chargement initial des outils... ---")
-        _available_tools = await tools.get_all_tools()
-    return _available_tools
+
 
 async def decide_model(message:str):
-    global _available_tools
-    chosen_model = await orchestrator.choose_model(message, _available_tools)
+    relevant_tools = await tools.get_relevant_tools(message, limit=5)
+    chosen_model = await orchestrator.choose_model(message, relevant_tools)
     print(f"--- 🎯 Décision : {chosen_model} ---")
     return chosen_model
 
@@ -233,7 +228,7 @@ async def chat_with_memories(history: list, chosen_model: str, user_id: str = "d
     messages = [{"role": "system", "content": system_prompt}] + history
     assistant_final_text = ""
     
-    available_tools = await get_tools()
+    available_tools = await tools.get_relevant_tools(last_user_message, limit=5)
 
     async for chunk in execute_agent_loop(messages, chosen_model, available_tools):
         if not chunk.startswith("¶") and not chunk.startswith("||AUDIO_ID:"):
@@ -242,7 +237,7 @@ async def chat_with_memories(history: list, chosen_model: str, user_id: str = "d
 
 # ----------------- LE RESTE EST INTACT -----------------
 
-async def execute_agent_loop(messages: list, chosen_model: str, available_tools: list) -> AsyncGenerator[str, Any]:
+async def execute_agent_loop(messages: list, chosen_model: str, available_tools: list, mute_audio: bool =False) -> AsyncGenerator[str, Any]:
     assistant_full_response = ""
     buffer_audio = ""
     is_in_hidden_thought = False
@@ -291,15 +286,18 @@ async def execute_agent_loop(messages: list, chosen_model: str, available_tools:
                     if is_in_hidden_thought:
                         yield f"¶{text_chunk}" 
                         continue
-                    
-                    buffer_audio += text_chunk
-                    if any(p in text_chunk for p in [".", "!", "?", "\n", ";", ","]) or len(buffer_audio) > 40:
-                        if len(buffer_audio.strip()) > 5:
-                            audio_id, _ = prepare_audio_slot()
-                            phrase = clean_text_for_tts(buffer_audio)
-                            asyncio.create_task(pre_generate_audio(audio_id, phrase))
-                            yield f"||AUDIO_ID:{audio_id}||"
-                            buffer_audio = ""
+
+                    if not mute_audio and not is_in_hidden_thought:
+                        clean_for_audio = text_chunk.replace("<think>", "").replace("</think>", "")
+                        buffer_audio += clean_for_audio
+                        
+                        if any(p in text_chunk for p in [".", "!", "?", "\n", ";", ","]) or len(buffer_audio) > 40:
+                            if len(buffer_audio.strip()) > 5:
+                                audio_id, _ = prepare_audio_slot()
+                                phrase = clean_text_for_tts(buffer_audio)
+                                asyncio.create_task(pre_generate_audio(audio_id, phrase))
+                                yield f"||AUDIO_ID:{audio_id}||"
+                                buffer_audio = ""
 
                 if chunk.message.tool_calls:
                     tool_calls.extend(chunk.message.tool_calls)
@@ -312,13 +310,14 @@ async def execute_agent_loop(messages: list, chosen_model: str, available_tools:
 
             for call in tool_calls:
                 status_text = f"Utilisation de l'outil : {call.function.name}..."
-                yield f"\n*{status_text}*\n"
+                yield f"\n\n*{status_text}*\n\n"
                 yield "\n"
                 
-                status_audio_id, _ = prepare_audio_slot()
-                text_clean = clean_text_for_tts(status_text)
-                asyncio.create_task(pre_generate_audio(status_audio_id, text_clean))
-                yield f"||AUDIO_ID:{status_audio_id}||"
+                if not mute_audio and not is_in_hidden_thought:
+                    status_audio_id, _ = prepare_audio_slot()
+                    text_clean = clean_text_for_tts(status_text)
+                    asyncio.create_task(pre_generate_audio(status_audio_id, text_clean))
+                    yield f"||AUDIO_ID:{status_audio_id}||"
 
                 result = await tools.call_tool_execution(call.function.name, call.function.arguments)
 
@@ -329,7 +328,7 @@ async def execute_agent_loop(messages: list, chosen_model: str, available_tools:
                     'tool_call_id': getattr(call, 'id', 'call_' + call.function.name)
                 })
 
-        if buffer_audio.strip():
+        if not mute_audio and buffer_audio.strip():
             final_audio_id, _ = prepare_audio_slot()
             phrase = clean_text_for_tts(buffer_audio.strip())
             asyncio.create_task(pre_generate_audio(final_audio_id, phrase))
