@@ -12,7 +12,7 @@
 	import { audioQueue } from '$lib/TTS.svelte';
 	import { connectGateway, sendMessage as sendWsMessage, chatState } from '$lib/websocket.svelte';
 	import trombone from '$lib/assets/trombone.png';
-	import { PUBLIC_URL_SERVEUR_PYTHON } from '$env/static/public';
+	import { env } from '$env/dynamic/public';
 	interface Message {
 		role: string;
 		think: string;
@@ -30,6 +30,11 @@
 		}
 	]);
 	let sessionActive = $state<number | null>(null);
+	interface MessageBDD {
+		role: string;
+		content: string;
+		image?: string | null;
+	}
 	interface Historique {
 		id: number;
 		resume: string;
@@ -213,12 +218,12 @@
 			const data = await res.json();
 
 			messages = data
-				.map((msg: any) => {
+				.map((msg: MessageBDD) => {
 					// --- L'ASTUCE EST ICI ---
 					// Si le message a une image (de la BDD), on lui accroche l'IP de Python
 					let imageFinale = null;
 					if (msg.image) {
-						imageFinale = PUBLIC_URL_SERVEUR_PYTHON + msg.image;
+						imageFinale = env.PUBLIC_URL_SERVEUR_PYTHON + msg.image;
 					}
 
 					return {
@@ -317,6 +322,7 @@
 									/>
 								{/if}
 							{:else}
+								<!-- eslint-disable-next-line -->
 								{@html formatMessage(msg.content)}
 							{/if}
 						</div>

@@ -189,11 +189,13 @@ async def chat_with_memories(history: list, chosen_model: str, user_id: str = "d
                 if hasattr(hit, 'payload') and hit.payload:
                     # Cas 1 : C'est un bel objet
                     text = hit.payload.get("text")
-                    if text: memories_list.append(text)
+                    if text:
+                        memories_list.append(text)
                 elif isinstance(hit, dict) and "payload" in hit:
                     # Cas 2 : C'est un dictionnaire brut
                     text = hit["payload"].get("text")
-                    if text: memories_list.append(text)
+                    if text: 
+                        memories_list.append(text)
                 elif isinstance(hit, tuple):
                     # Cas 3 : C'est un tuple (ton cas actuel). Le payload est le dictionnaire caché dedans !
                     for element in hit:
