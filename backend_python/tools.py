@@ -1,118 +1,125 @@
-import yaml
-import datetime
 import os
-import re
-import sys
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
-from dotenv import load_dotenv
+import json
+import importlib.util
+import uuid
+from qdrant_client import AsyncQdrantClient
+from qdrant_client.http import models
+from ollama import AsyncClient
 
-load_dotenv()
-CONFIG_PATH = "mcp_config.yaml"
+SKILLS_DIR = "skills"
 
+# Connexions locales pour le JIT
+qdrant = AsyncQdrantClient(host=os.getenv("URL_QDRANT", "localhost"), port=6333)
+ollama_client = AsyncClient(host=os.getenv("URL_SERVER_OLLAMA", "http://localhost:11434"))
 
+async def _get_tool_embedding(text: str):
+    """Génère un vecteur pour la description de l'outil."""
+    response = await ollama_client.embeddings(model="nomic-embed-text", prompt=text)
+    return response["embedding"]
 
-def load_mcp_config():
-    if not os.path.exists(CONFIG_PATH):
-        return {"mcp_servers": {}}
-    with open(CONFIG_PATH, "r") as f:
+async def sync_skills_to_qdrant():
+    """Indexe tous les skills présents dans le dossier /skills au démarrage."""
+    if not os.path.exists(SKILLS_DIR):
+        os.makedirs(SKILLS_DIR)
+        print("📁 Dossier /skills créé.")
+        return
+
+    # 1. Préparation de la collection Qdrant pour les Skills
+    try:
+        await qdrant.get_collection("jean_heude_skills")
+    except Exception:
+        print("📦 Création de la collection Qdrant 'jean_heude_skills'...")
+        await qdrant.create_collection(
+            collection_name="jean_heude_skills",
+            vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE),
+        )
+
+    # 2. Scan et Indexation
+    points = []
+    for skill_folder in os.listdir(SKILLS_DIR):
+        folder_path = os.path.join(SKILLS_DIR, skill_folder)
+        manifest_path = os.path.join(folder_path, "manifest.json")
         
-        content = f.read()
-        def replace_env_var(match):
-            var_name = match.group(1)
-            val = os.getenv(var_name)
+        if os.path.isdir(folder_path) and os.path.exists(manifest_path):
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
             
-            if val is None:
-                # On utilise sys.stderr pour ne pas polluer le flux JSON-RPC de MCP
-                print(f"⚠️ Attention : La variable {var_name} est absente du .env !", file=sys.stderr)
-                return f"MISSING_{var_name}"
+            # Le texte qui sert à la recherche sémantique : Nom + Description
+            text_to_embed = f"{manifest.get('name')} : {manifest.get('description')}"
+            vector = await _get_tool_embedding(text_to_embed)
             
-            # 2. CORRECTION DU TYPO : group(0) au lieu de groupe(0)
-            return val
-        pattern = re.compile(r"\${(\w+)}")
-        fixed_content = pattern.sub(replace_env_var, content)
+            # On génère un ID stable basé sur le nom du dossier pour éviter les doublons
+            stable_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, skill_folder))
+            
+            points.append(models.PointStruct(
+                id=stable_id,
+                vector=vector,
+                payload={"folder": skill_folder, "manifest": manifest}
+            ))
+    
+    if points:
+        await qdrant.upsert(collection_name="jean_heude_skills", points=points)
+        print(f"🔌 {len(points)} Skills indexés dans Qdrant pour le JIT.")
+
+async def get_relevant_tools(query: str, limit: int = 3, threshold: float = 0.5):
+    """Le fameux JIT : Retourne uniquement les outils pertinents, avec un score minimum."""
+    try:
+        query_vector = await _get_tool_embedding(query)
         
-        # On parse le YAML final "nettoyé"
-        return yaml.safe_load(fixed_content)
-
-
-async def get_all_tools():
-    """Charge dynamiquement TOUS les outils de TOUS les serveurs du YAML"""
-    config = load_mcp_config()
-    all_tools = []
-
-    # 1. Outil natif
-    all_tools.append({
-        "type": "function",
-        "function": {
-            "name": "get_current_time",
-            "description": "Donne l'heure et la date actuelle.",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    })
-
-    # 2. Boucle sur les serveurs
-    for server_name, srv_config in config.get("mcp_servers", {}).items():
-        # ASTUCE : On s'assure que l'environnement force un mode non-interactif
-        env = srv_config.get("env", os.environ.copy())
-        env["PYTHONUNBUFFERED"] = "1" 
-
-        params = StdioServerParameters(
-            command=srv_config["command"],
-            args=srv_config["args"],
-            env=env
+        # NOUVEAU : On ajoute score_threshold pour filtrer les outils hors sujet
+        results = await qdrant.query_points(
+            collection_name="jean_heude_skills",
+            query=query_vector,
+            limit=limit,
+            score_threshold=threshold  # <--- LE CORRECTIF MAGIQUE EST ICI
         )
         
-        try:
-            # On réduit le timeout pour ne pas bloquer tout le démarrage si un serveur est lent
-            async with stdio_client(params) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    result = await session.list_tools()
-                    for tool in result.tools:
-                        all_tools.append({
-                            "type": "function",
-                            "function": {
-                                "name": tool.name,
-                                "description": tool.description,
-                                "parameters": tool.inputSchema,
-                            }
-                        })
-        except Exception as e:
-            # On log l'erreur sur stderr de NOTRE backend pour ne pas polluer l'interface
-            print(f"⚠️ Erreur lors de l'initialisation de {server_name}: {e}", file=sys.stderr)
+        tools_list = []
+        for hit in results.points:
+            # Extraction blindée
+            manifest = None
+            if hasattr(hit, 'payload') and hit.payload:
+                manifest = hit.payload.get("manifest")
+            elif isinstance(hit, dict) and "payload" in hit:
+                manifest = hit["payload"].get("manifest")
+            elif isinstance(hit, tuple):
+                for element in hit:
+                    if isinstance(element, dict) and "manifest" in element:
+                        manifest = element["manifest"]
+            
+            if manifest:
+                tools_list.append({
+                    "type": "function",
+                    "function": manifest
+                })
+        
+        tool_names = [t["function"]["name"] for t in tools_list]
+        print(f"⚡ [JIT] Outils sélectionnés pour cette requête : {tool_names}")
+        return tools_list
 
-    return all_tools
+    except Exception as e:
+        print(f"⚠️ Erreur JIT Qdrant: {e}")
+        return []
 
-async def call_tool_execution(name, args):
-    """Cherche quel serveur possède l'outil et l'exécute"""
-    if name == "get_current_time":
-        maintenant = datetime.datetime.now()
-        date_longue = maintenant.strftime('%A %d %B %Y, %H:%M:%S')
-        return f"Nous sommes le {date_longue}."
-    config = load_mcp_config()
-    for server_name, srv_config in config.get("mcp_servers", {}).items():
-        params = StdioServerParameters(
-            command=srv_config["command"],
-            args=srv_config["args"],
-            env=srv_config.get("env")
-        )
-        try:
-            async with stdio_client(params) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    available_tools = await session.list_tools()
-                
-                    if any(t.name == name for t in available_tools.tools):
-                        # L'outil est trouvé, on l'exécute
-                        result = await session.call_tool(name, args)
-                        
-                        # Extraction propre du texte de réponse
-                        if hasattr(result, 'content') and result.content:
-                            return result.content[0].text
-                        return "L'outil a été exécuté mais n'a renvoyé aucun texte."
-        except Exception as e:
-            print(f"❌ Erreur sur {server_name} lors de l'exécution de {name}: {e}", file=sys.stderr)
-            return f"Désolé, l'outil {name} a rencontré un problème."
-
-    return f"Outil {name} non trouvé sur les serveurs configurés."
+async def call_tool_execution(tool_name: str, arguments: dict):
+    """Exécute l'outil (inchangé)."""
+    for skill_folder in os.listdir(SKILLS_DIR):
+        folder_path = os.path.join(SKILLS_DIR, skill_folder)
+        manifest_path = os.path.join(folder_path, "manifest.json")
+        
+        if os.path.isdir(folder_path) and os.path.exists(manifest_path):
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+            
+            if manifest.get("name") == tool_name:
+                script_path = os.path.join(folder_path, "main.py")
+                if not os.path.exists(script_path):
+                    return f"Erreur: Le script main.py est manquant dans {skill_folder}."
+                try:
+                    spec = importlib.util.spec_from_file_location(tool_name, script_path)
+                    module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(module)
+                    return await module.run(**arguments)
+                except Exception as e:
+                    return f"Erreur lors de l'exécution du skill {tool_name}: {str(e)}"
+    return f"Erreur: Outil '{tool_name}' inconnu."

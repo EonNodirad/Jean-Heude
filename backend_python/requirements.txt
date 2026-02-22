@@ -16,3 +16,13 @@ PyYAML
 ruff
 pytest
 pytest-asyncio
+
+
+tiktoken
+
+watchfiles
+
+Pillow
+
+python-telegram-bot
+discord.py

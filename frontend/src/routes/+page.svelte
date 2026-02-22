@@ -10,16 +10,31 @@
 	import { createRecorder } from '$lib/voice.svelte';
 	import micro from '$lib/assets/les-ondes-radio.png';
 	import { audioQueue } from '$lib/TTS.svelte';
-
-	let messages = $state([
+	import { connectGateway, sendMessage as sendWsMessage, chatState } from '$lib/websocket.svelte';
+	import trombone from '$lib/assets/trombone.png';
+	import { env } from '$env/dynamic/public';
+	interface Message {
+		role: string;
+		think: string;
+		content: string;
+		status: string;
+		image?: string | null;
+	}
+	let messages = $state<Message[]>([
 		{
 			role: 'assistant',
 			think: '',
 			content: 'Salut ! je suis ton assistant J.E.A.N-H.E.U.D.E',
+			image: '', // Ici on peut laisser vide
 			status: ''
 		}
 	]);
 	let sessionActive = $state<number | null>(null);
+	interface MessageBDD {
+		role: string;
+		content: string;
+		image?: string | null;
+	}
 	interface Historique {
 		id: number;
 		resume: string;
@@ -32,6 +47,32 @@
 
 	let currentMessage = $state('');
 	let attente = $state(false);
+
+	let selectedFile = $state<File | null>(null);
+	let previewUrl = $state<string | null>(null);
+	let fileInput: HTMLInputElement;
+
+	function triggerFileInput() {
+		fileInput.click();
+	}
+
+	// Fonction appelée quand un fichier est choisi
+	function handleFileSelect(e: Event) {
+		const target = e.target as HTMLInputElement;
+		if (target.files && target.files.length > 0) {
+			selectedFile = target.files[0];
+			// Créer une URL locale pour la prévisualisation
+			previewUrl = URL.createObjectURL(selectedFile);
+		}
+	}
+
+	// Fonction pour annuler la sélection (la petite croix sur la preview)
+	function clearImage() {
+		selectedFile = null;
+		//if (previewUrl) URL.revokeObjectURL(previewUrl);
+		previewUrl = null;
+		if (fileInput) fileInput.value = ''; // Reset de l'input
+	}
 
 	const recorder = createRecorder({
 		getSessionId: () => sessionActive,
@@ -58,69 +99,149 @@
 		},
 		onSessionCreated: (id) => (sessionActive = id)
 	});
+
 	onMount(async () => {
 		await rafraichirSession();
+		connectGateway('noeda_pc');
 	});
-	async function sendMessage(e: Event) {
-		e.preventDefault();
-		if (currentMessage.trim() === '') return;
+
+	$effect(() => {
+		// 1. Mise à jour en temps réel (le WebSocket s'occupe déjà de trier le texte)
+		if (chatState.isThinking && messages[0].role === 'assistant') {
+			messages[0].think = chatState.thinkStream;
+			messages[0].content = chatState.contentStream;
+
+			// Gestion dynamique du petit statut qui s'affiche
+			if (chatState.contentStream.length > 0) {
+				messages[0].status = 'Génération de la réponse...';
+			} else {
+				messages[0].status = 'Jean-Heude réfléchit...';
+			}
+		}
+
+		// 2. Gestion de la fin de génération
+		if (chatState.doneTrigger > 0) {
+			attente = false;
+			if (chatState.sessionId) {
+				sessionActive = chatState.sessionId;
+			}
+			if (chatState.model) {
+				modelChoisi = chatState.model;
+				voirModel = true;
+				setTimeout(() => (voirModel = false), 3000);
+			}
+			rafraichirSession();
+			chatState.doneTrigger = 0; // Reset
+		}
+	});
+
+	async function sendMessage(e: Event | null) {
+		if (e) e.preventDefault();
+		if (currentMessage.trim() === '' && !selectedFile) return;
+
 		attente = true;
-		messages = [{ role: 'user', think: '', content: currentMessage, status: '' }, ...messages];
+
+		// Préparation de l'interface (on affiche l'image si elle existe)
+		const promptFinall = currentMessage || (previewUrl ? 'Décris cette image.' : '');
+		const imageAffiche = previewUrl;
+
 		messages = [
-			{ role: 'assistant', think: '', content: '', status: ' Je réfléchit ...' },
+			{ role: 'user', think: '', content: promptFinall, image: imageAffiche, status: '' },
 			...messages
 		];
-		let reponse = await fetch('/api/chat', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ content: currentMessage, session_id: sessionActive })
-		});
+		messages = [
+			{ role: 'assistant', think: '', content: '', status: 'Analyse en cours...' },
+			...messages
+		];
 
-		const session_id = reponse.headers.get('x-session-id');
-		const model_chosen = reponse.headers.get('x-chosen-model');
+		const promptToSend = currentMessage;
+		const fileToSend = selectedFile;
 
-		if (model_chosen) {
-			modelChoisi = model_chosen;
-			voirModel = true;
-
-			setTimeout(() => {
-				voirModel = false;
-			}, 3000);
-		}
-
-		if (session_id) sessionActive = parseInt(session_id);
-
-		const reader = reponse.body?.getReader();
-
-		if (reader) {
-			await handleStream(reader, (think, content, status) => {
-				messages[0].think = think;
-				messages[0].content = content;
-				messages[0].status = status;
-			});
-		}
-
+		// Nettoyage de l'input
 		currentMessage = '';
-		attente = false;
-		await rafraichirSession();
+		clearImage(); // On enlève la preview
+
+		// --- ROUTAGE INTELLIGENT ---
+		if (fileToSend) {
+			// CAS 1 : IL Y A UNE IMAGE -> On utilise la route HTTP Multimodale
+			console.log('🚀 Envoi multimodal via HTTP...');
+			const formData = new FormData();
+			formData.append('prompt', promptToSend || 'Décris cette image.');
+			formData.append('image', fileToSend);
+			if (sessionActive) formData.append('session_id', sessionActive.toString());
+
+			try {
+				// IMPORTANT: Utilise le même handleStream que pour la voix !
+				// Tu devras peut-être adapter légèrement comment tu appelles le fetch
+				// si tu passes par ton proxy SvelteKit +server.ts (ce que je recommande)
+				// Voici l'exemple d'appel direct pour la démo :
+				const response = await fetch('/api/multimodal', { method: 'POST', body: formData });
+
+				// Gestion des headers de session (comme pour le STT)
+				const newSessionId = response.headers.get('x-session-id');
+				if (newSessionId) sessionActive = parseInt(newSessionId);
+
+				const reader = response.body?.getReader();
+				if (reader) {
+					// On réutilise ta super fonction de tri !
+					await handleStream(reader, (think, content, status) => {
+						messages[0].think = think;
+						messages[0].content = content;
+						messages[0].status = status;
+					});
+				}
+			} catch (err) {
+				console.error('Erreur envoi image:', err);
+				messages[0].content = "Erreur lors de l'envoi de l'image.";
+			} finally {
+				attente = false;
+				rafraichirSession();
+			}
+		} else {
+			// CAS 2 : TEXTE SEUL -> On utilise le WebSocket (rapide)
+			console.log('🚀 Envoi texte via WebSocket...');
+			chatState.sessionId = sessionActive;
+			sendWsMessage(promptToSend);
+			// Note : 'attente' sera remis à false par l'effet qui surveille chatState.doneTrigger
+		}
 	}
+
 	async function ChargerConversation(id: number) {
 		if (attente) return;
 
 		console.log('🔵 Tentative de chargement de la session :', id);
 		sessionActive = id;
+		chatState.sessionId = id;
 
 		const res = await fetch(`api/historique/${id}`);
 		if (res.ok) {
 			const data = await res.json();
 
-			messages = [...data].reverse();
+			messages = data
+				.map((msg: MessageBDD) => {
+					// --- L'ASTUCE EST ICI ---
+					// Si le message a une image (de la BDD), on lui accroche l'IP de Python
+					let imageFinale = null;
+					if (msg.image) {
+						imageFinale = env.PUBLIC_URL_SERVEUR_PYTHON + msg.image;
+					}
+
+					return {
+						role: msg.role,
+						content: msg.content,
+						think: '',
+						status: '',
+						image: imageFinale
+					};
+				})
+				.reverse();
 
 			console.log('🟢 Interface mise à jour avec', messages.length, 'messages');
 		} else {
 			console.error('🔴 Erreur serveur Python :', res.status);
 		}
 	}
+
 	async function rafraichirSession() {
 		const h = await fetch('/api/historique');
 		if (h.ok) {
@@ -188,10 +309,22 @@
 						</div>
 					{/if}
 
-					{#if msg.content}
+					{#if msg.content || msg.image}
 						<div class="content-bubble">
-							<!-- eslint-disable-next-line svelte/no-at-html-tags -->
-							{@html formatMessage(msg.content)}
+							{#if msg.role === 'user'}
+								<p style="white-space: pre-wrap; margin: 0 0 10px 0;">{msg.content}</p>
+
+								{#if msg.image}
+									<img
+										src={msg.image}
+										alt="Upload"
+										style="max-width: 250px; border-radius: 10px; margin-top: 10px; display: block;"
+									/>
+								{/if}
+							{:else}
+								<!-- eslint-disable-next-line -->
+								{@html formatMessage(msg.content)}
+							{/if}
 						</div>
 					{:else if msg.role === 'assistant' && !msg.think}
 						<div class="dot-typing-container">
@@ -202,7 +335,30 @@
 			{/each}
 		</div>
 		<form class="chatter" onsubmit={sendMessage}>
-			<input class="chat" bind:value={currentMessage} placeholder="pose ta question ..." />
+			{#if previewUrl}
+				<div class="image-preview-container">
+					<img src={previewUrl} alt="Preview" class="preview-img" />
+					<button type="button" class="close-preview" onclick={clearImage}>×</button>
+				</div>
+			{/if}
+
+			<input
+				type="file"
+				accept="image/*"
+				style="display: none;"
+				bind:this={fileInput}
+				onchange={handleFileSelect}
+			/>
+			<button type="button" class="attach-btn" onclick={triggerFileInput} disabled={attente}>
+				<img src={trombone} aria-hidden="true" alt="" />
+			</button>
+
+			<input
+				class="chat"
+				bind:value={currentMessage}
+				placeholder="pose ta question ..."
+				disabled={attente}
+			/>
 			<button class="button-go" disabled={attente} type="submit">Envoyer</button>
 			<button
 				class="new-chat"
@@ -598,5 +754,61 @@
 		z-index: 50;
 		font-family: sans-serif;
 		font-size: 0.9rem;
+	}
+	.attach-btn {
+		all: unset;
+		cursor: pointer;
+		padding: 0 10px;
+		font-size: 1.5rem; /* Ajuste la taille de l'icône */
+		transition: transform 0.2s;
+		color: #f3f4f6;
+	}
+	.attach-btn:hover:not(:disabled) {
+		transform: scale(1.2);
+	}
+	.attach-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+	.attach-btn img {
+		width: 30px;
+		height: 30px;
+		/* Si ton SVG est noir, ceci peut le rendre blanc/clair */
+		filter: invert(1);
+	}
+
+	/* Conteneur de la prévisualisation */
+	.image-preview-container {
+		position: absolute;
+		bottom: 70px; /* Ajuste pour qu'il soit au-dessus de la barre */
+		left: 20px;
+		background: rgba(17, 24, 39, 0.9);
+		padding: 5px;
+		border-radius: 10px;
+		border: 1px solid rgba(231, 100, 79, 0.4);
+		display: flex;
+		align-items: start;
+	}
+
+	.preview-img {
+		max-height: 80px;
+		border-radius: 5px;
+	}
+
+	.close-preview {
+		all: unset;
+		background: #e7644f;
+		color: white;
+		border-radius: 50%;
+		width: 20px;
+		height: 20px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		cursor: pointer;
+		margin-left: -10px;
+		margin-top: -5px;
+		font-weight: bold;
+		font-size: 12px;
 	}
 </style>
