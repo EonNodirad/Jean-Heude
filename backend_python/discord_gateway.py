@@ -3,6 +3,7 @@ import re
 import discord
 from dotenv import load_dotenv
 from agent_runner import AgentRunner
+from auth import init_auth_db, is_authorized, authorize_user, SECRET_PASSWORD
 
 # 1. Chargement du Token
 load_dotenv()
@@ -17,7 +18,7 @@ user_sessions = {}
 # 3. Configuration des Intents (Obligatoire pour lire le texte)
 intents = discord.Intents.default()
 intents.message_content = True
-
+init_auth_db() # Prépare la table de sécurité SQLite
 client = discord.Client(intents=intents)
 
 @client.event
@@ -33,8 +34,27 @@ async def on_message(message):
         return
 
     user_id = str(message.author.id)
-    user_text = message.content
-    
+    if message.content.startswith('/pair'):
+        # On vérifie qu'il fait bien ça en Message Privé (DM) pour ne pas fuiter le mot de passe !
+        if not isinstance(message.channel, discord.DMChannel):
+            await message.delete() # Efface le message si c'est sur un salon public
+            await message.channel.send("⚠️ Par mesure de sécurité, la commande /pair ne s'utilise qu'en Message Privé !")
+            return
+
+        parts = message.content.split()
+        if len(parts) > 1 and parts[1] == SECRET_PASSWORD:
+            authorize_user("discord", user_id)
+            await message.channel.send("✅ **Authentification réussie.** Bonjour Maître. Mon système est à votre entière disposition.")
+        else:
+            await message.channel.send("❌ **Mot de passe incorrect.** Accès refusé.")
+        return
+    if not is_authorized("discord", user_id):
+        # Si la personne n'est pas autorisée, Jean-Heude l'ignore silencieusement.
+        # (On pourrait mettre un message, mais le silence évite le spam).
+        return
+
+    # ---> À partir d'ici, l'utilisateur est autorisé ! <---
+    user_text = message.content.replace(f'<@{client.user.id}>', '').strip()
     # 2. On affiche "Jean-Heude est en train d'écrire..." sur Discord
     async with message.channel.typing():
         session_id = user_sessions.get(user_id)
