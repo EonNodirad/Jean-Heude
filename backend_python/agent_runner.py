@@ -26,6 +26,28 @@ class AgentRunner:
         self.admin_client = AsyncClient(host=os.getenv("URL_SERVER_OLLAMA"))
         self.admin_model = "llama3.1:8b" 
         
+
+    def _load_os_context(self) -> str:
+        """Lit les fichiers de la Couche 1 et 2 pour forger l'identité du PDG"""
+        contexte = ""
+        
+        # 1. Charger la Constitution (AGENTS.md)
+        path_agents = "memory/system/AGENTS.md"
+        if os.path.exists(path_agents):
+            with open(path_agents, "r", encoding="utf-8") as f:
+                contexte += f.read() + "\n\n"
+                
+        # 2. Charger le Profil Utilisateur (USER.md)
+        path_user = "memory/system/USER.md"
+        if os.path.exists(path_user):
+            with open(path_user, "r", encoding="utf-8") as f:
+                contexte += f.read() + "\n\n"
+                
+        # Fallback de sécurité si les fichiers n'existent pas encore
+        if not contexte.strip():
+            contexte = "Tu es J.E.A.N-H.E.U.D.E, un assistant local souverain."
+            
+        return contexte
     def count_tokens(self, messages: list) -> int:
         """Compte les jetons d'un historique complet."""
         text = " ".join([str(m["content"]) for m in messages])
@@ -88,10 +110,13 @@ class AgentRunner:
                         memory_context.append({"role": ligne[0], "content": ligne[1]})
         
         # 2. Le System Prompt spécifique à la vision
+        os_context = self._load_os_context()
         system_prompt = {
             "role": "system",
             "content": (
-                "Tu es Jean-Heude, un assistant personnel intelligent et capable d'analyser des images.\n"
+                f"{os_context}\n"
+                "--- INSTRUCTION SPÉCIALE MULTIMODALE ---\n"
+                "Tu as des yeux. Analyse l'image fournie avec une précision d'expert technique."
             )
         }
         
@@ -169,8 +194,13 @@ class AgentRunner:
                 (session_id,)
             )
             lignes = await cursor.fetchall()
-            contexte_message = [{"role" : m[0], "content": m[1] } for m in reversed(lignes)]
-
+            os_context = self._load_os_context()
+            
+            # On place la charte comportementale en TOUT PREMIER message
+            contexte_message = [{"role": "system", "content": os_context}]
+            
+            # Puis on ajoute l'historique de la conversation
+            contexte_message.extend([{"role": m[0], "content": m[1]} for m in reversed(lignes)])
         # --- 4. DÉCLENCHEMENT DU CONTEXT GUARD (En mémoire uniquement) ---
         current_tokens = self.count_tokens(contexte_message)
         if current_tokens > self.max_tokens:

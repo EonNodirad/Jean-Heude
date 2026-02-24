@@ -26,3 +26,5 @@ Pillow
 
 python-telegram-bot
 discord.py
+
+neo4j

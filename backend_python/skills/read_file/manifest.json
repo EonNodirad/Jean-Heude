@@ -1,0 +1,16 @@
+{
+    "name": "read_file",
+    "description": "Lit le contenu d'un fichier local sur le disque pour que l'IA puisse l'analyser.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "file_path": {
+                "type": "string",
+                "description": "Le chemin complet ou relatif du fichier à lire (ex: 'memory/projects/script.py')."
+            }
+        },
+        "required": [
+            "file_path"
+        ]
+    }
+}
