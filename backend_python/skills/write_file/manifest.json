@@ -1,0 +1,21 @@
+{
+    "name": "write_file",
+    "description": "Crée ou modifie un fichier local sur le disque en y écrivant du code ou du texte.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "file_path": {
+                "type": "string",
+                "description": "Le chemin du fichier à créer ou modifier (ex: 'memory/projects/app.py')."
+            },
+            "content": {
+                "type": "string",
+                "description": "Le code complet ou le texte exact à écrire dans le fichier."
+            }
+        },
+        "required": [
+            "file_path",
+            "content"
+        ]
+    }
+}

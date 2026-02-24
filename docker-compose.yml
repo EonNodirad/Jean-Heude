@@ -23,6 +23,7 @@ services:
       - qdrant
       - tts
       - stt
+      - neo4j
   tts:
     build: ./backend_python/tts
     restart: always
@@ -50,3 +51,15 @@ services:
       - ./frontend/.env
     extra_hosts:
       - "host.docker.internal:host-gateway"
+  neo4j:
+    image: neo4j:5.26.0
+    restart: always
+    ports:
+      - "7474:7474" # Interface Web (Neo4j Browser)
+      - "7687:7687" # Port de communication (Bolt) pour Python
+    environment:
+      - NEO4J_AUTH=neo4j/jeanheude_password # Le login et mot de passe par défaut
+      - NEO4J_PLUGINS=["apoc"] # Outils avancés pour les requêtes complexes
+    volumes:
+      - ./neo4j_data:/data
+      - ./neo4j_logs:/logs
