@@ -1,0 +1,25 @@
+{
+    "name": "manage_core_memory",
+    "description": "Permet de lire, ajouter ou supprimer des informations dans ta mémoire profonde à long terme (MEMORY.md). Utilise cet outil quand l'utilisateur te demande de retenir un fait important sur lui, de changer une préférence, ou d'oublier une ancienne information.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": [
+                    "read",
+                    "append",
+                    "delete_keyword"
+                ],
+                "description": "L'action à effectuer. 'read' pour lire toute ta mémoire, 'append' pour ajouter un fait, 'delete_keyword' pour effacer les lignes contenant un mot précis."
+            },
+            "content": {
+                "type": "string",
+                "description": "Obligatoire pour 'append' (le fait à ajouter) et 'delete_keyword' (le mot à chercher pour supprimer la ligne). Laisse vide pour 'read'."
+            }
+        },
+        "required": [
+            "action"
+        ]
+    }
+}

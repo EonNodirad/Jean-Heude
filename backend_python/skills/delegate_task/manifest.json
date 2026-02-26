@@ -1,0 +1,21 @@
+{
+    "name": "delegate_task",
+    "description": "Délègue une tâche longue, complexe ou nécessitant de coder un projet entier à une équipe d'experts IA autonomes (Swarm). Utilise cet outil au lieu d'écrire toi-même du code long ou de faire des tâches en plusieurs étapes. Le système recrutera les bons agents et ils travailleront en arrière-plan.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "project_name": {
+                "type": "string",
+                "description": "Un nom court et sans espace pour le projet (ex: 'jeu_snake', 'scraper_amazon'). Il servira à nommer le dossier de travail."
+            },
+            "objective": {
+                "type": "string",
+                "description": "La description complète et détaillée de ce que l'équipe doit accomplir. Sois très précis sur le résultat attendu."
+            }
+        },
+        "required": [
+            "project_name",
+            "objective"
+        ]
+    }
+}
