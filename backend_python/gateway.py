@@ -1,6 +1,19 @@
-# gateway.py
+import os
 import asyncio
+import aiosqlite
+import datetime
+import httpx
 from fastapi import WebSocket
+from croniter import croniter
+from dotenv import load_dotenv
+import re
+
+load_dotenv()
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+DISCORD_CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID")
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+
 
 class Gateway:
     def __init__(self, agent_runner):
@@ -10,6 +23,10 @@ class Gateway:
         self.lanes: dict[str, asyncio.Queue] = {}
         # Dictionnaire pour garder une trace des workers (tâches de fond)
         self.workers: dict[str, asyncio.Task] = {}
+        
+        # 💓 NOUVEAU : Lancement du Heartbeat Universel dès la création de la Gateway !
+        self.heartbeat_task = asyncio.create_task(self._universal_heartbeat())
+        print("💓 [Gateway] Heartbeat Universel démarré en arrière-plan.")
 
     async def connect(self, websocket: WebSocket, client_id: str):
         await websocket.accept()
@@ -51,13 +68,8 @@ class Gateway:
                     async def on_token(token):
                         await websocket.send_json({"type": "token", "content": token})
 
-                    # 🎯 Appel de l'Agent Runner (via ta pipeline)
-                    # Note : on passe on_token comme callback pour le streaming
-                    from agent_runner import AgentRunner
-                    runner = AgentRunner() # Ou utilise l'instance passée au init
-                    
-                    # On exécute le chat
-                    result = await runner.process_chat(content, session_id, on_token)
+                    # 🎯 Appel de l'Agent Runner
+                    result = await self.agent_runner.process_chat(content, session_id, on_token)
 
                     # Signal de fin
                     await websocket.send_json({
@@ -73,3 +85,110 @@ class Gateway:
                 break
             except Exception as e:
                 print(f"❌ Erreur Lane {client_id}: {e}")
+
+    # ==========================================
+    # 🌟 NOUVEAU : SYSTÈME D'ÉVÉNEMENTS (CRONS)
+    # ==========================================
+    async def _route_message(self, channel: str, message: str):
+        """Envoie le résultat de la tâche vers le bon canal."""
+        
+        # ✈️ ROUTE 1 : TELEGRAM
+        if channel == "telegram" and TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+            payload = {"chat_id": TELEGRAM_CHAT_ID, "text": f"⏱️ *Tâche Auto*\n\n{message}", "parse_mode": "Markdown"}
+            async with httpx.AsyncClient() as client:
+                await client.post(url, json=payload)
+                print("📨 [Gateway] Message routé vers Telegram.")
+
+        # 🎮 ROUTE 2 : DISCORD
+        elif channel == "discord" and os.getenv("DISCORD_BOT_TOKEN") and os.getenv("DISCORD_CHANNEL_ID"):
+            token = os.getenv("DISCORD_BOT_TOKEN")
+            channel_id = os.getenv("DISCORD_CHANNEL_ID")
+            
+            url = f"https://discord.com/api/v10/channels/{channel_id}/messages"
+            headers = {
+                "Authorization": f"Bot {token}",
+                "Content-Type": "application/json"
+            }
+            payload = {"content": f"⏱️ **Tâche Auto de Jean-Heude**\n\n{message}"}
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, headers=headers, json=payload)
+                if response.status_code == 200:
+                    print("🎮 [Gateway] Message automatique routé vers Discord.")
+                else:
+                    print(f"❌ [Gateway] Erreur Discord : {response.text}")
+
+        # 🖥️ ROUTE 3 : SVELTE / TAURI
+        elif channel == "svelte":
+            # On sauvegarde en BDD pour l'historique de l'UI
+            async with aiosqlite.connect("memory/memoire.db") as db:
+                await db.execute(
+                    "INSERT INTO memory_chat (role, content, timestamp, sessionID) VALUES (?, ?, datetime('now'), ?)",
+                    ("assistant", f"⏱️ [Tâche Automatique]\n{message}", 1) # Note: sessionID 1 par défaut, à adapter si besoin
+                )
+                await db.commit()
+            
+            # Si le client est actuellement connecté, on lui pousse le message en direct via WebSocket !
+            for client_id, ws in self.active_connections.items():
+                try:
+                    await ws.send_json({"type": "proactive_message", "content": message})
+                    print(f"🖥️ [Gateway] Message poussé en direct sur le WebSocket de {client_id}.")
+                except:
+                    pass
+        else:
+            print(f"⚠️ [Gateway] Canal inconnu : {channel}")
+
+    async def _execute_task(self, task_id: int, prompt: str, channel: str):
+        """Fait réfléchir Jean-Heude en tâche de fond en utilisant son VRAI cerveau."""
+        print(f"⚡ [Gateway] Exécution de la tâche {task_id} : {prompt}")
+        try:
+            reponse_complete = ""
+            
+            # Un "faux" streamer pour accumuler la réponse en mémoire (comme sur Telegram)
+            async def background_stream(token):
+                nonlocal reponse_complete
+                clean_token = re.sub(r'\|\|AUDIO_ID:.*?\|\|', '', token)
+                if clean_token and not clean_token.startswith("¶"):
+                    reponse_complete += clean_token
+
+            # 🧠 ON UTILISE LE VRAI CERVEAU !
+            # session_id=None va créer une nouvelle session dans ta BDD pour garder une trace
+            instruction_cachee = f"[INSTRUCTION SYSTÈME EN ARRIÈRE-PLAN] Exécute cette tâche de ton agenda : {prompt}"
+            await self.agent_runner.process_chat(instruction_cachee, session_id=None, on_token_callback=background_stream)
+            
+            # Nettoyage : On ne garde que la réponse finale, sans le <think> et sans les logs d'outils
+            parts = re.split(r'\*Utilisation de l\'outil :.*?\*', reponse_complete)
+            reponse_finale = parts[-1]
+            final_text = re.sub(r'<think>.*?(</think>|$)', '', reponse_finale, flags=re.DOTALL).strip()
+            
+            # On envoie le résultat final propre au routeur
+            if final_text:
+                await self._route_message(channel, final_text)
+            else:
+                print(f"⚠️ [Gateway] La tâche {task_id} n'a produit aucun texte.")
+                
+        except Exception as e:
+            print(f"❌ [Gateway] Erreur exécution tâche {task_id} : {e}")
+
+    async def _universal_heartbeat(self):
+        """Le Cœur : vérifie l'agenda toutes les minutes."""
+        while True:
+            try:
+                maintenant = datetime.datetime.now()
+                async with aiosqlite.connect("memory/tasks.db") as db:
+                    cursor = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_tasks'")
+                    if await cursor.fetchone():
+                        cursor = await db.execute("SELECT id, prompt, cron_expression, channel FROM scheduled_tasks")
+                        tasks = await cursor.fetchall()
+                        
+                        for task_id, prompt, cron_expr, channel in tasks:
+                            if croniter.match(cron_expr, maintenant):
+                                # On lance la tâche sans bloquer la boucle
+                                asyncio.create_task(self._execute_task(task_id, prompt, channel))
+            except Exception as e:
+                print(f"❌ [Gateway Heartbeat] Erreur BDD : {e}")
+                
+            # Calcule le temps restant jusqu'à la prochaine minute exacte (ex: XX:XX:00)
+            secondes_restantes = 60 - datetime.datetime.now().second
+            await asyncio.sleep(secondes_restantes)

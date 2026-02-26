@@ -1,0 +1,9 @@
+{
+    "name": "list_scheduled_tasks",
+    "description": "Permet de lire toutes les tâches actuellement planifiées dans ton agenda. Utilise cet outil avant de modifier ou supprimer une tâche pour trouver son ID.",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+    }
+}

@@ -7,6 +7,7 @@ import tools
 import tiktoken
 from ollama import AsyncClient
 from functools import wraps
+import graph_memory
 
 def session_guard(func):
     """Garantit que chaque agent dispose d'un espace de travail isolé."""
@@ -78,13 +79,17 @@ class AgentRunner:
         )
         res_facts = await self.admin_client.chat(model=self.admin_model, messages=[{"role": "user", "content": flush_prompt}])
         facts = res_facts.message.content.strip()
-        
         if "aucun" not in facts.lower() and len(facts) > 5:
-            # On sauvegarde les faits dans la mémoire longue (qui est souveraine)
+            # 1. Sauvegarde texte (Ton code actuel)
             with open("memory/MEMORY.md", "a", encoding="utf-8") as f:
                 f.write(f"\n{facts}\n")
             await memory.sync_memory_md()
-            print("✅ [Context Guard] Faits persistés dans MEMORY.md et indexés.")
+            
+            # 2. NOUVEAU : Sauvegarde Graphe !
+            donnees_graphe = await graph_memory.extract_ontology(facts)
+            await graph_memory.graph_db.insert_graph_data(donnees_graphe)
+            
+            print("✅ [Context Guard] Faits persistés dans MEMORY.md et indexés dans le Graphe.")
 
         # 2. Algorithme de compaction (pour le prompt LLM uniquement)
         print("📉 [Context Guard] Création du résumé pour le prompt...")
@@ -111,10 +116,13 @@ class AgentRunner:
         
         # 2. Le System Prompt spécifique à la vision
         os_context = self._load_os_context()
+        graph_context = await graph_memory.graph_db.search_graph(prompt)
+        
         system_prompt = {
             "role": "system",
             "content": (
-                f"{os_context}\n"
+                f"{os_context}\n\n"
+                f"{graph_context}\n\n"
                 "--- INSTRUCTION SPÉCIALE MULTIMODALE ---\n"
                 "Tu as des yeux. Analyse l'image fournie avec une précision d'expert technique."
             )
@@ -196,8 +204,9 @@ class AgentRunner:
             lignes = await cursor.fetchall()
             os_context = self._load_os_context()
             
+            graph_context = await graph_memory.graph_db.search_graph(text_content)
             # On place la charte comportementale en TOUT PREMIER message
-            contexte_message = [{"role": "system", "content": os_context}]
+            contexte_message = [{"role": "system", "content": f"{os_context}\n\n{graph_context}"}]
             
             # Puis on ajoute l'historique de la conversation
             contexte_message.extend([{"role": m[0], "content": m[1]} for m in reversed(lignes)])
