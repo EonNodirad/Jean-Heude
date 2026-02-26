@@ -1,0 +1,31 @@
+{
+  "name": "manage_scheduled_task",
+  "description": "Permet de modifier ou de supprimer une tâche planifiée dans l'agenda via son ID.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": ["update", "delete"],
+        "description": "L'action à effectuer : 'update' pour modifier, 'delete' pour supprimer."
+      },
+      "task_id": {
+        "type": "integer",
+        "description": "L'ID de la tâche à modifier ou supprimer."
+      },
+      "new_prompt": {
+        "type": "string",
+        "description": "(Optionnel) La nouvelle instruction, si tu as choisi 'update'."
+      },
+      "new_cron": {
+        "type": "string",
+        "description": "(Optionnel) Le nouveau CRON, si tu as choisi 'update'."
+      },
+      "new_channel": {
+        "type": "string",
+        "description": "(Optionnel) Le nouveau canal, si tu as choisi 'update'."
+      }
+    },
+    "required": ["action", "task_id"]
+  }
+}
