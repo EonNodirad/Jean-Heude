@@ -25,16 +25,22 @@ load_dotenv()
 STT_SERVER_URL = os.getenv("STT_SERVER_URL")
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 
-async def watch_skills_folder():
-    """Surveille le dossier /skills et met à jour Qdrant automatiquement."""
-    print("👀 [Auto-Watch] Surveillance du dossier /skills activée...")
-    # S'il n'existe pas, on le crée pour éviter que awatch ne plante
+async def watch_tools_changes():
+    """Surveille le dossier /skills ET le fichier mcp_servers.yaml pour mettre à jour Qdrant automatiquement."""
+    print("👀 [Auto-Watch] Surveillance JIT (Skills & MCP) activée...")
+    
+    # Sécurité : On crée le dossier s'il n'existe pas
     if not os.path.exists("skills"):
         os.makedirs("skills")
         
-    # awatch écoute les événements du système de fichiers sans bloquer le serveur !
-    async for changes in awatch("skills"):
-        print("🔄 [Auto-Watch] Modification détectée dans les skills ! Mise à jour en cours...")
+    # Sécurité : On crée le YAML vide s'il n'existe pas pour que awatch ne plante pas
+    if not os.path.exists("mcp_servers.yaml"):
+        with open("mcp_servers.yaml", "w", encoding="utf-8") as f:
+            f.write("mcp_servers:\n")
+            
+    # 🔥 LA MAGIE EST ICI : awatch écoute les deux chemins en simultané !
+    async for changes in awatch("skills", "mcp_servers.yaml"):
+        print(f"🔄 [Auto-Watch] Modification détectée : {changes}. Mise à jour des outils en cours...")
         await tools.sync_skills_to_qdrant()
 
 @asynccontextmanager
@@ -73,7 +79,7 @@ async def lifespan(app: FastAPI):
     print("✅ Jean-Heude est prêt !")
     asyncio.create_task(memory.cleanup_audio_store())
 
-    asyncio.create_task(watch_skills_folder())
+    asyncio.create_task(watch_tools_changes())
     yield
     
     # --- PHASE DE FERMETURE ---

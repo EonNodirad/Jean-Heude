@@ -51,7 +51,7 @@ Renvoie UNIQUEMENT un objet JSON valide :
             return []
 
     async def _run_sub_agent(self, agent: dict, current_context: str) -> str:
-        """Phase 2 : L'agent travaille en utilisant TON moteur memory.py (avec ses outils !)"""
+        """Phase 2 : L'agent travaille en utilisant TON moteur memory.py"""
         print(f"\n🚀 Lancement du sous-agent : {agent['name']}")
         
         prompt_mission = f"Objectif global: {self.objective}\n\nContexte actuel:\n{current_context}\n\nTa mission immédiate: {agent['task']}"
@@ -61,16 +61,17 @@ Renvoie UNIQUEMENT un objet JSON valide :
             {"role": "user", "content": prompt_mission}
         ]
         
-        # 1. Ton orchestrateur choisit le meilleur modèle pour CET agent !
         chosen_model = await memory.decide_model(prompt_mission)
         
-        # 2. Ton moteur charge les outils pertinents pour CET agent !
+        # 1. On récupère les outils normaux
         relevant_tools = await tools.get_relevant_tools(prompt_mission, limit=5)
         
-        # 3. On lance LA BOUCLE AGENTIQUE (en mute pour ne pas spammer le TTS de Jean-Heude)
+        # 🚨 2. LE FIX ANTI-INCEPTION : On retire "delegate_task" des mains du sous-agent !
+        safe_tools = [t for t in relevant_tools if t["function"]["name"] != "delegate_task"]
+        
+        # 3. On lance LA BOUCLE avec les safe_tools
         final_text = ""
-        async for chunk in memory.execute_agent_loop(messages, chosen_model, relevant_tools, mute_audio=True):
-            # On nettoie la pensée (¶) et l'audio pour garder juste le rapport de l'agent
+        async for chunk in memory.execute_agent_loop(messages, chosen_model, available_tools=safe_tools, mute_audio=True):
             clean_chunk = re.sub(r'\|\|AUDIO_ID:.*?\|\|', '', chunk)
             if not clean_chunk.startswith("¶"):
                 final_text += clean_chunk
