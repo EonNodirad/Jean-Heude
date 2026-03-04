@@ -121,15 +121,10 @@ class Gateway:
 
         # 🖥️ ROUTE 3 : SVELTE / TAURI
         elif channel == "svelte":
-            # On sauvegarde en BDD pour l'historique de l'UI
-            async with aiosqlite.connect("memory/memoire.db") as db:
-                await db.execute(
-                    "INSERT INTO memory_chat (role, content, timestamp, sessionID) VALUES (?, ?, datetime('now'), ?)",
-                    ("assistant", f"⏱️ [Tâche Automatique]\n{message}", 1) # Note: sessionID 1 par défaut, à adapter si besoin
-                )
-                await db.commit()
+            # On ne fait plus de INSERT INTO ici, car process_chat l'a DÉJÀ fait proprement 
+            # dans la bonne session !
             
-            # Si le client est actuellement connecté, on lui pousse le message en direct via WebSocket !
+            # On se contente de rafraîchir l'écran si ton app est ouverte
             for client_id, ws in self.active_connections.items():
                 try:
                     await ws.send_json({"type": "proactive_message", "content": message})
@@ -145,24 +140,38 @@ class Gateway:
         try:
             reponse_complete = ""
             
-            # Un "faux" streamer pour accumuler la réponse en mémoire (comme sur Telegram)
             async def background_stream(token):
                 nonlocal reponse_complete
                 clean_token = re.sub(r'\|\|AUDIO_ID:.*?\|\|', '', token)
                 if clean_token and not clean_token.startswith("¶"):
                     reponse_complete += clean_token
 
-            # 🧠 ON UTILISE LE VRAI CERVEAU !
-            # session_id=None va créer une nouvelle session dans ta BDD pour garder une trace
-            instruction_cachee = f"[INSTRUCTION SYSTÈME EN ARRIÈRE-PLAN] Exécute cette tâche de ton agenda : {prompt}"
-            await self.agent_runner.process_chat(instruction_cachee, session_id=None, on_token_callback=background_stream)
+            # 🎯 VRAIE RÉCUPÉRATION DE LA SESSION ACTIVE
+            last_session_id = 1
+            try:
+                async with aiosqlite.connect("memory/memoire.db") as db:
+                    # On utilise rowid qui marche à 100% sur SQLite
+                    cursor = await db.execute("SELECT rowid FROM historique_chat ORDER BY timestamp DESC LIMIT 1")
+                    row = await cursor.fetchone()
+                    if row:
+                        last_session_id = row[0]
+            except Exception as e:
+                print(f"⚠️ Erreur récupération session : {e}")
+
+            instruction_cachee = f"⏱️ [TÂCHE PLANIFIÉE] {prompt}"
             
-            # Nettoyage : On ne garde que la réponse finale, sans le <think> et sans les logs d'outils
+            # 👻 LA MAGIE OPÈRE ICI : is_hidden=True
+            await self.agent_runner.process_chat(
+                instruction_cachee, 
+                session_id=last_session_id, 
+                on_token_callback=background_stream,
+                is_hidden=True
+            )
+            
             parts = re.split(r'\*Utilisation de l\'outil :.*?\*', reponse_complete)
             reponse_finale = parts[-1]
             final_text = re.sub(r'<think>.*?(</think>|$)', '', reponse_finale, flags=re.DOTALL).strip()
             
-            # On envoie le résultat final propre au routeur
             if final_text:
                 await self._route_message(channel, final_text)
             else:
@@ -170,7 +179,7 @@ class Gateway:
                 
         except Exception as e:
             print(f"❌ [Gateway] Erreur exécution tâche {task_id} : {e}")
-
+            
     async def _universal_heartbeat(self):
         """Le Cœur : vérifie l'agenda toutes les minutes."""
         while True:

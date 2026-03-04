@@ -84,7 +84,7 @@ class Orchestrator:
         enriched_models = []
 
         # 1. Filtrage des modèles non-conversationnels
-        blacklist = ["embed", "classification", "rerank", "vision","deepcoder:14b"]
+        blacklist = ["embed", "classification", "rerank", "vision","deepcoder:14b","qwen3-vl"]
         for m in all_models:
             if any(word in m.lower() for word in blacklist):
                 continue

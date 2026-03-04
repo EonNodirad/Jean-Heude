@@ -1,0 +1,23 @@
+mcp_servers:
+  brave-search:
+    command: npx
+    args:
+    - -y
+    - '@modelcontextprotocol/server-brave-search'
+    env:
+      BRAVE_API_KEY: ${BRAVE_API_KEY}
+  puppeteer:
+    command: node
+    args:
+    - ./puppeteer_mcp/node_modules/@modelcontextprotocol/server-puppeteer/dist/index.js
+  world_monitor: 
+    command: node 
+    args:
+    - ./world_monitor_mcp/index.js
+    env:
+      WORLD_MONITOR_URL: ${WORLD_MONITOR_URL} 
+  meteo:
+    command: node
+    args:
+    - ./meteo_mcp/index.js
+    env: {}

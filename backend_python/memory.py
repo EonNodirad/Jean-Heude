@@ -114,7 +114,7 @@ def clean_text_for_tts(text):
 
 
 async def decide_model(message:str):
-    relevant_tools = await tools.get_relevant_tools(message, limit=5)
+    relevant_tools = await tools.get_relevant_tools(message, limit=15)
     chosen_model = await orchestrator.choose_model(message, relevant_tools)
     print(f"--- 🎯 Décision : {chosen_model} ---")
     return chosen_model
@@ -183,7 +183,7 @@ async def chat_with_memories(history: list, chosen_model: str, user_id: str = "d
             v_results = await client_qdrant.query_points(
                 collection_name="jean_heude_memories",
                 query=vector,
-                limit=3
+                limit=5
             )
             for hit in v_results.points:
                 if hasattr(hit, 'payload') and hit.payload:
@@ -230,7 +230,7 @@ async def chat_with_memories(history: list, chosen_model: str, user_id: str = "d
     messages = [{"role": "system", "content": system_prompt}] + history
     assistant_final_text = ""
     
-    available_tools = await tools.get_relevant_tools(last_user_message, limit=5)
+    available_tools = await tools.get_relevant_tools(last_user_message, limit=20)
 
     async for chunk in execute_agent_loop(messages, chosen_model, available_tools):
         if not chunk.startswith("¶") and not chunk.startswith("||AUDIO_ID:"):

@@ -1,0 +1,31 @@
+{
+    "name": "create_new_skill",
+    "description": "Crée un nouvel outil (Skill) Python pour toi-même. Utilise cet outil quand tu te rends compte qu'il te manque une capacité (ex: convertir un fichier, calculer des maths, etc.). Tu dois fournir le nom, la description, le schéma JSON des paramètres, et le code Python complet.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "skill_name": {
+                "type": "string",
+                "description": "Le nom du dossier de l'outil (en minuscules_avec_underscores)."
+            },
+            "description": {
+                "type": "string",
+                "description": "La description claire de ce que fait l'outil (pour ton propre manifest.json)."
+            },
+            "parameters_schema": {
+                "type": "string",
+                "description": "Le dictionnaire JSON des 'properties' des arguments requis (ex: {\"texte\": {\"type\": \"string\"}})."
+            },
+            "python_code": {
+                "type": "string",
+                "description": "Le code Python complet du fichier main.py. DOIT contenir une fonction `async def run(...)`."
+            }
+        },
+        "required": [
+            "skill_name",
+            "description",
+            "parameters_schema",
+            "python_code"
+        ]
+    }
+}
