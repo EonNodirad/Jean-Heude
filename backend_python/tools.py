@@ -91,13 +91,17 @@ async def sync_skills_to_qdrant():
         os.makedirs(SKILLS_DIR)
         
     try:
-        await qdrant.get_collection("jean_heude_skills")
+        await qdrant.delete_collection("jean_heude_skills")
+        print("🧹 Nettoyage des anciens skills en mémoire...")
     except Exception:
-        print("📦 Création de la collection Qdrant 'jean_heude_skills'...")
-        await qdrant.create_collection(
-            collection_name="jean_heude_skills",
-            vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE),
-        )
+        pass # Si ça plante, c'est juste qu'elle n'existait pas encore. Pas grave !
+
+    # --- 2. CRÉATION (On reconstruit du neuf) ---
+    print("📦 Création de la collection Qdrant 'jean_heude_skills'...")
+    await qdrant.create_collection(
+        collection_name="jean_heude_skills",
+        vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE),
+    )
     try:
         await qdrant.get_collection("jean_heude_knowledge")
     except Exception:

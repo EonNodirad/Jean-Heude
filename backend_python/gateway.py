@@ -64,12 +64,12 @@ class Gateway:
                 if data.get("type") == "message":
                     content = data.get("content")
                     session_id = data.get("session_id")
-
+                    user_id = data.get("user_id", "invite")
                     async def on_token(token):
                         await websocket.send_json({"type": "token", "content": token})
 
                     # 🎯 Appel de l'Agent Runner
-                    result = await self.agent_runner.process_chat(content, session_id, on_token)
+                    result = await self.agent_runner.process_chat(content, session_id, user_id, on_token)
 
                     # Signal de fin
                     await websocket.send_json({
@@ -134,9 +134,9 @@ class Gateway:
         else:
             print(f"⚠️ [Gateway] Canal inconnu : {channel}")
 
-    async def _execute_task(self, task_id: int, prompt: str, channel: str):
-        """Fait réfléchir Jean-Heude en tâche de fond en utilisant son VRAI cerveau."""
-        print(f"⚡ [Gateway] Exécution de la tâche {task_id} : {prompt}")
+    async def _execute_task(self, task_id: int, prompt: str, channel: str, user_id: str):
+        """Fait réfléchir Jean-Heude en tâche de fond pour LE BON UTILISATEUR."""
+        print(f"⚡ [Gateway] Exécution de la tâche {task_id} pour {user_id} : {prompt}")
         try:
             reponse_complete = ""
             
@@ -146,24 +146,29 @@ class Gateway:
                 if clean_token and not clean_token.startswith("¶"):
                     reponse_complete += clean_token
 
-            # 🎯 VRAIE RÉCUPÉRATION DE LA SESSION ACTIVE
+            # 🎯 VRAIE RÉCUPÉRATION DE LA SESSION ACTIVE DU BON UTILISATEUR
             last_session_id = 1
             try:
-                async with aiosqlite.connect("memory/memoire.db") as db:
-                    # On utilise rowid qui marche à 100% sur SQLite
-                    cursor = await db.execute("SELECT rowid FROM historique_chat ORDER BY timestamp DESC LIMIT 1")
+                user_db_path = f"memory/users/{user_id}/memoire.db"
+                async with aiosqlite.connect(user_db_path) as db:
+                    # NOUVEAU : On filtre par userID pour ne pas prendre la session d'un autre !
+                    cursor = await db.execute(
+                        "SELECT rowid FROM historique_chat WHERE userID = ? ORDER BY timestamp DESC LIMIT 1",
+                        (user_id,)
+                    )
                     row = await cursor.fetchone()
                     if row:
                         last_session_id = row[0]
             except Exception as e:
-                print(f"⚠️ Erreur récupération session : {e}")
+                print(f"⚠️ Erreur récupération session pour {user_id} : {e}")
 
             instruction_cachee = f"⏱️ [TÂCHE PLANIFIÉE] {prompt}"
             
-            # 👻 LA MAGIE OPÈRE ICI : is_hidden=True
+            # 👻 LA MAGIE OPÈRE ICI : On utilise le VRAI user_id
             await self.agent_runner.process_chat(
                 instruction_cachee, 
                 session_id=last_session_id, 
+                user_id=user_id,  # ⬅️ Le propriétaire de la tâche !
                 on_token_callback=background_stream,
                 is_hidden=True
             )
@@ -181,23 +186,36 @@ class Gateway:
             print(f"❌ [Gateway] Erreur exécution tâche {task_id} : {e}")
             
     async def _universal_heartbeat(self):
-        """Le Cœur : vérifie l'agenda toutes les minutes."""
+        """Le Cœur : vérifie l'agenda de CHAQUE utilisateur toutes les minutes."""
         while True:
-            try:
-                maintenant = datetime.datetime.now()
-                async with aiosqlite.connect("memory/tasks.db") as db:
-                    cursor = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_tasks'")
-                    if await cursor.fetchone():
-                        cursor = await db.execute("SELECT id, prompt, cron_expression, channel FROM scheduled_tasks")
-                        tasks = await cursor.fetchall()
-                        
-                        for task_id, prompt, cron_expr, channel in tasks:
-                            if croniter.match(cron_expr, maintenant):
-                                # On lance la tâche sans bloquer la boucle
-                                asyncio.create_task(self._execute_task(task_id, prompt, channel))
-            except Exception as e:
-                print(f"❌ [Gateway Heartbeat] Erreur BDD : {e}")
-                
-            # Calcule le temps restant jusqu'à la prochaine minute exacte (ex: XX:XX:00)
+            maintenant = datetime.datetime.now()
+            users_dir = "memory/users"
+            
+            # On vérifie que le dossier principal existe
+            if os.path.exists(users_dir):
+                # On boucle sur tous les dossiers utilisateurs (ex: noe_01, alice_88)
+                for user_id in os.listdir(users_dir):
+                    user_task_db = f"{users_dir}/{user_id}/tasks.db"
+                    
+                    # Si cet utilisateur a des tâches planifiées
+                    if os.path.exists(user_task_db):
+                        try:
+                            async with aiosqlite.connect(user_task_db) as db:
+                                cursor = await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='scheduled_tasks'")
+                                if await cursor.fetchone():
+                                    # Plus besoin de chercher 'user_id' dans la table, on le connait grâce au dossier !
+                                    cursor = await db.execute("SELECT id, prompt, cron_expression, channel FROM scheduled_tasks")
+                                    tasks = await cursor.fetchall()
+                                    
+                                    for task_id, prompt, cron_expr, channel in tasks:
+                                        if croniter.match(cron_expr, maintenant):
+                                            # On lance la tâche avec le BON utilisateur
+                                            asyncio.create_task(self._execute_task(task_id, prompt, channel, user_id))
+                        except Exception as e:
+                            print(f"❌ [Heartbeat] Erreur BDD pour {user_id} : {e}")
+
+            # Calcule le temps restant jusqu'à la prochaine minute exacte
             secondes_restantes = 60 - datetime.datetime.now().second
             await asyncio.sleep(secondes_restantes)
+            
+    
