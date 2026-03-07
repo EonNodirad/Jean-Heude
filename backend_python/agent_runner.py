@@ -9,6 +9,7 @@ import tiktoken
 from ollama import AsyncClient
 from functools import wraps
 import graph_memory
+from qdrant_client.http import models
 
 def session_guard(func):
     """Garantit que chaque agent dispose d'un espace de travail isolé."""
@@ -18,7 +19,12 @@ def session_guard(func):
         return await func(self, text_content, session_id, on_token_callback, **kwargs)
     return wrapper
 
-
+def get_user_dir(user_id: str) -> str:
+    """Crée et retourne le chemin d'accès au dossier unique de l'utilisateur."""
+    # On crée une arborescence propre : memory/users/noe_01/system/
+    base_path = f"memory/users/{user_id}"
+    os.makedirs(f"{base_path}/system", exist_ok=True)
+    return base_path
 class AgentRunner:
     def __init__(self):
         self.encoder = tiktoken.get_encoding("cl100k_base")
@@ -28,34 +34,34 @@ class AgentRunner:
         self.admin_client = AsyncClient(host=os.getenv("URL_SERVER_OLLAMA"))
         self.admin_model = "llama3.1:8b" 
         
-
-    def _load_os_context(self) -> str:
-        """Lit les fichiers de la Couche 1 et 2 pour forger l'identité du PDG"""
+    def _load_os_context(self, user_id: str) -> str:
         contexte = ""
+        user_dir = get_user_dir(user_id)
         
-        # 1. Charger la Constitution (AGENTS.md)
-        path_agents = "memory/system/AGENTS.md"
+        # Le fichier AGENTS.md propre à l'utilisateur
+        path_agents = f"{user_dir}/system/AGENTS.md"
         if os.path.exists(path_agents):
             with open(path_agents, "r", encoding="utf-8") as f:
                 contexte += f.read() + "\n\n"
                 
-        # 2. Charger le Profil Utilisateur (USER.md)
-        path_user = "memory/system/USER.md"
+        # Le fichier USER.md propre à l'utilisateur
+        path_user = f"{user_dir}/system/USER.md"
         if os.path.exists(path_user):
             with open(path_user, "r", encoding="utf-8") as f:
+                contexte += f"--- PROFIL DE L'UTILISATEUR ACTUEL ({user_id}) ---\n"
                 contexte += f.read() + "\n\n"
-                
-        # Fallback de sécurité si les fichiers n'existent pas encore
+        
         if not contexte.strip():
             contexte = "Tu es J.E.A.N-H.E.U.D.E, un assistant local souverain."
             
+        return contexte
         return contexte
     def count_tokens(self, messages: list) -> int:
         """Compte les jetons d'un historique complet."""
         text = " ".join([str(m["content"]) for m in messages])
         return len(self.encoder.encode(text))
 
-    async def _context_window_guard(self, history: list) -> list:
+    async def _context_window_guard(self, history: list,user_id: str) -> list:
         """
         Génère un prompt compressé (Head + Résumé + Tail) À LA VOLÉE.
         Ne modifie AUCUNE base de données pour préserver l'UI.
@@ -81,14 +87,18 @@ class AgentRunner:
         res_facts = await self.admin_client.chat(model=self.admin_model, messages=[{"role": "user", "content": flush_prompt}])
         facts = res_facts.message.content.strip()
         if "aucun" not in facts.lower() and len(facts) > 5:
-            # 1. Sauvegarde texte (Ton code actuel)
-            with open("memory/MEMORY.md", "a", encoding="utf-8") as f:
+            # ✅ CORRECTION : Écriture dans le BON dossier utilisateur
+            user_dir = get_user_dir(user_id)
+            with open(f"{user_dir}/system/MEMORY.md", "a", encoding="utf-8") as f:
                 f.write(f"\n{facts}\n")
-            await memory.sync_memory_md()
+            
+            # ⚠️ ATTENTION : sync_memory_md doit aussi être adapté (on le fera après dans memory.py)
+            await memory.sync_memory_md(user_id)
             
             # 2. NOUVEAU : Sauvegarde Graphe !
             donnees_graphe = await graph_memory.extract_ontology(facts)
-            await graph_memory.graph_db.insert_graph_data(donnees_graphe)
+            # ⚠️ ATTENTION : insert_graph_data doit aussi être adapté pour isoler le graphe par utilisateur (on y reviendra)
+            await graph_memory.graph_db.insert_graph_data(donnees_graphe,user_id)
             
             print("✅ [Context Guard] Faits persistés dans MEMORY.md et indexés dans le Graphe.")
 
@@ -103,13 +113,13 @@ class AgentRunner:
         print("✅ [Context Guard] Compaction mémoire terminée.")
         # On retourne la liste compressée pour l'envoyer au LLM
         return compressed_history
-    async def process_multimodal_chat(self, prompt: str, image_b64: str | None,image_path: str|None, session_id: int, stream_callback):
+    async def process_multimodal_chat(self, prompt: str, image_b64: str | None,image_path: str|None, session_id: int,user_id : str, stream_callback):
         print(f"⚙️ AgentRunner: Traitement multimodal pour session {session_id}")
-        
+        user_db_path = f"{get_user_dir(user_id)}/memoire.db"
         # 1. On charge l'historique directement depuis SQLite
         memory_context = []
         if session_id:
-            async with aiosqlite.connect("memory/memoire.db") as db:
+            async with aiosqlite.connect(user_db_path) as db:
                 async with db.execute("SELECT role, content FROM memory_chat WHERE sessionID = ? ORDER BY timestamp ASC LIMIT 20", (session_id,)) as cursor:
                     lignes = await cursor.fetchall()
                     for ligne in lignes:
@@ -175,7 +185,7 @@ class AgentRunner:
                         ("assistant", assistant_final_text.strip(), session_id, None)
                     )
                 await db.commit()
-    async def _recall_web_knowledge(self, query: str) -> str:
+    async def _recall_web_knowledge(self, query: str,user_id: str) -> str:
         """Fouille dans la collection de savoir accumulé sur le web."""
         try:
             # On utilise la fonction d'embedding que tu as déjà dans tools.py
@@ -185,8 +195,17 @@ class AgentRunner:
             results = await tools.qdrant.query_points(
                 collection_name="jean_heude_knowledge",
                 query=query_vector,
-                limit=3,
-                score_threshold=0.7 # On ne prend que le très pertinent
+                limit=5,
+                score_threshold=0.7,
+                # 🛡️ LE FILTRE MAGIQUE : Ne remonte que les infos de CE user_id
+                query_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="user_id",
+                            match=models.MatchValue(value=user_id)
+                        )
+                    ]
+                )
             )
             
             if not results.points:
@@ -203,37 +222,34 @@ class AgentRunner:
             print(f"⚠️ Erreur rappel connaissance web: {e}")
             return ""
         
-@session_guard
-async def process_chat(self, text_content: str, session_id: int | None, on_token_callback, is_hidden: bool = False):
-        async with aiosqlite.connect("memory/memoire.db") as db:
+    @session_guard
+    async def process_chat(self, text_content: str, session_id: int | None, user_id: str, on_token_callback, is_hidden: bool = False):
+        user_db_path = f"{get_user_dir(user_id)}/memoire.db"
+        async with aiosqlite.connect(user_db_path) as db:
             # 1. Gestion Session
             if session_id is None:
                 resume = text_content[:30] + "..."
                 cursor = await db.execute(
+                    # 👤 NOUVEAU : On utilise la vraie variable user_id au lieu de "noe_01"
                     "INSERT INTO historique_chat (timestamp, resume, userID) VALUES (datetime('now'), ?, ?)",
-                    (resume, "noe_01")
+                    (resume, user_id)
                 )
                 await db.commit()
                 session_id = cursor.lastrowid
-                print(f"🆕 Nouvelle session créée : ID {session_id}")
+                print(f"🆕 Nouvelle session créée : ID {session_id} pour {user_id}")
 
-            # 2. Sauvegarde INTACTE du message (pour Svelte) UNIQUEMENT SI CE N'EST PAS UNE TÂCHE CACHÉE 👻
-            if not is_hidden:
-                await db.execute(
-                    "INSERT INTO memory_chat (role, content, timestamp, sessionID) VALUES (?, ?, datetime('now'), ?)",
-                    ("user", text_content, session_id)
-                )
-                await db.commit()
+            # ... (Sauvegarde INTACTE du message) ...
             
-            # 3. Préparation du contexte (Identité + Graphe + Web + Date)
-            os_context = self._load_os_context()
-            graph_context = await graph_memory.graph_db.search_graph(text_content)
+            # 3. Préparation du contexte
+            # 👤 NOUVEAU : On passe le user_id pour charger le bon fichier
+            os_context = self._load_os_context(user_id)
+            graph_context = await graph_memory.graph_db.search_graph(text_content,user_id)
             
             # --- NOUVEAU : Récupération du savoir Web (Auto-Cache Qdrant) ---
-            web_context = await self._recall_web_knowledge(text_content)
+            web_context = await self._recall_web_knowledge(text_content, user_id)
             
             # --- NOUVEAU : Date dynamique pour éviter le bug "2023" ---
-            date_actuelle = datetime.datetime.now().strftime("%A %d %B %Y à %H:%M")
+            date_actuelle = datetime.datetime.now().strftime("%A %d %B %Y à %H:%M:%S")
             
             # Construction du super-prompt système
             system_content = (
@@ -244,7 +260,11 @@ async def process_chat(self, text_content: str, session_id: int | None, on_token
             if web_context:
                 system_content += f"--- SAVOIR RÉCENT (WEB CACHE) ---\n{web_context}\n\n"
             
-            system_content += f"INFO SYSTÈME : Nous sommes le {date_actuelle}. Utilise tes connaissances et les souvenirs web ci-dessus pour répondre."
+            system_content += (
+                f"=== HORLOGE SYSTÈME ACTIVE ===\n"
+                f"Date et Heure actuelles : {date_actuelle}\n"
+                f"RÈGLE ABSOLUE : Tu AS accès à l'heure via ce prompt."
+            )
 
             # Récupération de l'historique de conversation (les 20 derniers messages)
             cursor = await db.execute( 
@@ -260,19 +280,18 @@ async def process_chat(self, text_content: str, session_id: int | None, on_token
         # --- 4. DÉCLENCHEMENT DU CONTEXT GUARD (Compaction si nécessaire) ---
         current_tokens = self.count_tokens(contexte_message)
         if current_tokens > self.max_tokens:
-            contexte_message = await self._context_window_guard(contexte_message)
+            contexte_message = await self._context_window_guard(contexte_message, user_id)
 
         # 5. Sélection du modèle et Génération
         chosen_model = await memory.decide_model(text_content)
         print(f"🧠 Modèle choisi : {chosen_model}")
 
-        # 🔍 Récupération des outils pertinents (JIT Qdrant)
-        relevant_tools = await tools.get_relevant_tools(text_content, limit=5)
+
 
         assistant_final_text = ""
         
         # Lancement de la boucle agentique
-        async for chunk in memory.chat_with_memories(contexte_message, chosen_model, available_tools=relevant_tools):
+        async for chunk in memory.chat_with_memories(contexte_message, chosen_model):
             await on_token_callback(chunk)
             clean_chunk = re.sub(r'\|\|AUDIO_ID:.*?\|\|', '', chunk)
             if not clean_chunk.startswith("¶"): 
@@ -280,7 +299,7 @@ async def process_chat(self, text_content: str, session_id: int | None, on_token
         
         # 6. Sauvegarde de la réponse dans la DB (pour l'UI)
         if assistant_final_text.strip():
-            async with aiosqlite.connect("memory/memoire.db") as db_final:
+            async with aiosqlite.connect(user_db_path) as db_final:
                 await db_final.execute(
                     "INSERT INTO memory_chat (role, content, timestamp, sessionID) VALUES (?, ?, datetime('now'), ?)",
                     ("assistant", assistant_final_text.strip(), session_id)
@@ -289,3 +308,5 @@ async def process_chat(self, text_content: str, session_id: int | None, on_token
                 print("✅ Réponse assistant sauvegardée.")
 
         return {"session_id": session_id, "model": chosen_model}
+    
+

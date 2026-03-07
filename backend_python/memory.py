@@ -7,7 +7,7 @@ import httpx
 import aiosqlite
 from typing import AsyncGenerator, Any
 from dotenv import load_dotenv
-
+import tools
 from IA import Orchestrator
 import tools
 from ollama import AsyncClient
@@ -33,10 +33,6 @@ client_qdrant = AsyncQdrantClient(host=url_qdrant, port=6333)
 
 # ----------------- NOUVEAU : GESTION HYBRIDE DE LA MÉMOIRE -----------------
 
-async def _get_embedding(text: str):
-    """Obtient le vecteur via le modèle Nomic d'Ollama"""
-    response = await client.embeddings(model="nomic-embed-text", prompt=text)
-    return response["embedding"]
 
 async def sync_memory_md():
     """
@@ -69,7 +65,7 @@ async def sync_memory_md():
             if len(content) < 5: 
                 continue
 
-            vector = await _get_embedding(content)
+            vector = await tools._get_tool_embedding(content)
             v_id = str(uuid.uuid4())
             
             # Stockage Sémantique
@@ -179,7 +175,7 @@ async def chat_with_memories(history: list, chosen_model: str, user_id: str = "d
         
         # 1. Recherche par SENS (Qdrant)
         try:
-            vector = await _get_embedding(last_user_message)
+            vector = await tools._get_tool_embedding(last_user_message)
             v_results = await client_qdrant.query_points(
                 collection_name="jean_heude_memories",
                 query=vector,
@@ -219,15 +215,28 @@ async def chat_with_memories(history: list, chosen_model: str, user_id: str = "d
         memories_str = "\n".join([f"- {m}" for m in memories_list])
         print("✅ Fin de la recherche mémoire")
 
-    system_prompt = (
-    f"Tu es Jean-Heude, un assistant personnel franc et objectif.\n"
-    "Tu répondras en format markdown.\n"
-    "Donne une réponse claire, comme si c'était un dialogue oral.\n"
-    f"\nSouvenirs concernant l'utilisateur :\n{memories_str}\n\n"
-    "Utilise le contexte de la conversation ci-dessous pour répondre de manière cohérente."
+    bloc_souvenirs = (
+        "--- SOUVENIRS CONCERNANT L'UTILISATEUR (MÉMOIRE LONG TERME) ---\n"
+        f"{memories_str if memories_str else 'Aucun souvenir spécifique.'}\n"
     )
+
+    # 2. On fusionne avec le contexte venant de AgentRunner
+    messages = []
+    system_merged = False
     
-    messages = [{"role": "system", "content": system_prompt}] + history
+    for msg in history:
+        if msg["role"] == "system" and not system_merged:
+            # On combine le contexte d'AgentRunner (Date, Web, Graph) avec les souvenirs d'ici
+            nouveau_contenu = msg["content"] + "\n\n" + bloc_souvenirs + "\nTu es Jean-Heude, un assistant personnel franc et objectif. Réponds de manière claire et naturelle."
+            messages.append({"role": "system", "content": nouveau_contenu})
+            system_merged = True
+        else:
+            messages.append(msg)
+            
+    # Sécurité au cas où il n'y aurait pas de system prompt
+    if not system_merged:
+        messages.insert(0, {"role": "system", "content": f"Tu es Jean-Heude.\n{bloc_souvenirs}"})
+
     assistant_final_text = ""
     
     available_tools = await tools.get_relevant_tools(last_user_message, limit=20)
@@ -338,3 +347,6 @@ async def execute_agent_loop(messages: list, chosen_model: str, available_tools:
 
     except Exception as e:
         yield f"Erreur dans la boucle agentique : {str(e)}"
+
+
+
