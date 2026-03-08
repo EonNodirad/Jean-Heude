@@ -4,3 +4,7 @@ __pycache__/
 memory/*.db
 .env
 .git/
+**/node_modules
+**/__pycache__
+.venv
+memory/

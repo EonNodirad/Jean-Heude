@@ -1,266 +1,242 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import nouvelleDiscussion from '$lib/assets/nouvelle-discussion.svg';
-	import reglage from '$lib/assets/reglage.png';
-	import { formatMessage } from '$lib/format';
-	import 'highlight.js/styles/github-dark.css';
-	import { fly } from 'svelte/transition';
-	import trois_points from '$lib/assets/trois-points.png';
-	import { handleStream } from '$lib/lecture_reponse';
-	import { createRecorder } from '$lib/voice.svelte';
-	import micro from '$lib/assets/les-ondes-radio.png';
-	import { audioQueue } from '$lib/TTS.svelte';
-	import { connectGateway, sendMessage as sendWsMessage, chatState } from '$lib/websocket.svelte';
-	import trombone from '$lib/assets/trombone.png';
-	import { env } from '$env/dynamic/public';
-	interface Message {
-		role: string;
-		think: string;
-		content: string;
-		status: string;
-		image?: string | null;
-	}
-	let messages = $state<Message[]>([
-		{
-			role: 'assistant',
-			think: '',
-			content: 'Salut ! je suis ton assistant J.E.A.N-H.E.U.D.E',
-			image: '', // Ici on peut laisser vide
-			status: ''
-		}
-	]);
-	let sessionActive = $state<number | null>(null);
-	interface MessageBDD {
-		role: string;
-		content: string;
-		image?: string | null;
-	}
-	interface Historique {
-		id: number;
-		resume: string;
-	}
+    import { onMount } from 'svelte';
+    import nouvelleDiscussion from '$lib/assets/nouvelle-discussion.svg';
+    import reglage from '$lib/assets/reglage.png';
+    import { formatMessage } from '$lib/format';
+    import 'highlight.js/styles/github-dark.css';
+    import { fly } from 'svelte/transition';
+    import trois_points from '$lib/assets/trois-points.png';
+    import { handleStream } from '$lib/lecture_reponse';
+    import { createRecorder } from '$lib/voice.svelte';
+    import micro from '$lib/assets/les-ondes-radio.png';
+    import { audioQueue } from '$lib/TTS.svelte';
+    import { connectGateway, sendMessage as sendWsMessage, chatState } from '$lib/websocket.svelte';
+    import trombone from '$lib/assets/trombone.png';
+    
+    // ✅ IMPORTS POUR L'AUTH ET L'URL
+    import { env } from '$env/dynamic/public';
+    import { currentUser } from '$lib/stores';
+    import { goto } from '$app/navigation';
 
-	let historiques = $state<Historique[]>([]);
+    const API_URL = env.PUBLIC_URL_SERVEUR_PYTHON || 'http://localhost:8000';
 
-	let modelChoisi = $state('');
-	let voirModel = $state(false);
+    interface Message {
+        role: string;
+        think: string;
+        content: string;
+        status: string;
+        image?: string | null;
+    }
+    let messages = $state<Message[]>([
+        {
+            role: 'assistant',
+            think: '',
+            content: 'Salut ! je suis ton assistant J.E.A.N-H.E.U.D.E',
+            image: '',
+            status: ''
+        }
+    ]);
+    let sessionActive = $state<number | null>(null);
+    interface MessageBDD {
+        role: string;
+        content: string;
+        image?: string | null;
+    }
+    interface Historique {
+        id: number;
+        resume: string;
+    }
 
-	let currentMessage = $state('');
-	let attente = $state(false);
+    let historiques = $state<Historique[]>([]);
+    let modelChoisi = $state('');
+    let voirModel = $state(false);
+    let currentMessage = $state('');
+    let attente = $state(false);
+    let selectedFile = $state<File | null>(null);
+    let previewUrl = $state<string | null>(null);
+    let fileInput: HTMLInputElement;
 
-	let selectedFile = $state<File | null>(null);
-	let previewUrl = $state<string | null>(null);
-	let fileInput: HTMLInputElement;
+    function triggerFileInput() {
+        fileInput.click();
+    }
 
-	function triggerFileInput() {
-		fileInput.click();
-	}
+    function handleFileSelect(e: Event) {
+        const target = e.target as HTMLInputElement;
+        if (target.files && target.files.length > 0) {
+            selectedFile = target.files[0];
+            previewUrl = URL.createObjectURL(selectedFile);
+        }
+    }
 
-	// Fonction appelée quand un fichier est choisi
-	function handleFileSelect(e: Event) {
-		const target = e.target as HTMLInputElement;
-		if (target.files && target.files.length > 0) {
-			selectedFile = target.files[0];
-			// Créer une URL locale pour la prévisualisation
-			previewUrl = URL.createObjectURL(selectedFile);
-		}
-	}
+    function clearImage() {
+        selectedFile = null;
+        previewUrl = null;
+        if (fileInput) fileInput.value = '';
+    }
 
-	// Fonction pour annuler la sélection (la petite croix sur la preview)
-	function clearImage() {
-		selectedFile = null;
-		//if (previewUrl) URL.revokeObjectURL(previewUrl);
-		previewUrl = null;
-		if (fileInput) fileInput.value = ''; // Reset de l'input
-	}
+    const recorder = createRecorder({
+        getSessionId: () => sessionActive,
+		getUserId: () => $currentUser || '',
+        onTranscriptionStart: () => {
+            attente = true;
+            messages = [{ role: 'assistant', think: '', content: '', status: 'Transcription...' }, ...messages];
+        },
+        onStream: (think, content, status) => {
+            messages[0].think = think;
+            messages[0].content = content;
+            messages[0].status = status;
+        },
+        onEnd: () => {
+            attente = false;
+            rafraichirSession();
+        },
+        onModelChosen: (model) => {
+            modelChoisi = model;
+            voirModel = true;
+            setTimeout(() => (voirModel = false), 3000);
+        },
+        onSessionCreated: (id) => (sessionActive = id)
+    });
 
-	const recorder = createRecorder({
-		getSessionId: () => sessionActive,
-		onTranscriptionStart: () => {
-			attente = true;
-			messages = [
-				{ role: 'assistant', think: '', content: '', status: 'Transcription...' },
-				...messages
-			];
-		},
-		onStream: (think, content, status) => {
-			messages[0].think = think;
-			messages[0].content = content;
-			messages[0].status = status;
-		},
-		onEnd: () => {
-			attente = false;
-			rafraichirSession();
-		},
-		onModelChosen: (model) => {
-			modelChoisi = model;
-			voirModel = true;
-			setTimeout(() => (voirModel = false), 3000);
-		},
-		onSessionCreated: (id) => (sessionActive = id)
-	});
+    onMount(async () => {
+        // 🔒 REDIRECTION SI NON CONNECTÉ
+        if (!$currentUser) {
+            goto('/login');
+            return;
+        }
 
-	onMount(async () => {
-		await rafraichirSession();
-		connectGateway('noeda_pc');
-	});
+        await rafraichirSession();
+        
+        // 🔌 ON CONNECTE LE WEBSOCKET AVEC LE VRAI PSEUDO
+        connectGateway($currentUser); 
+    });
 
-	$effect(() => {
-		// 1. Mise à jour en temps réel (le WebSocket s'occupe déjà de trier le texte)
-		if (chatState.isThinking && messages[0].role === 'assistant') {
-			messages[0].think = chatState.thinkStream;
-			messages[0].content = chatState.contentStream;
+    $effect(() => {
+        if (chatState.isThinking && messages[0].role === 'assistant') {
+            messages[0].think = chatState.thinkStream;
+            messages[0].content = chatState.contentStream;
+            messages[0].status = chatState.contentStream.length > 0 ? 'Génération de la réponse...' : 'Jean-Heude réfléchit...';
+        }
 
-			// Gestion dynamique du petit statut qui s'affiche
-			if (chatState.contentStream.length > 0) {
-				messages[0].status = 'Génération de la réponse...';
-			} else {
-				messages[0].status = 'Jean-Heude réfléchit...';
-			}
-		}
+        if (chatState.doneTrigger > 0) {
+            attente = false;
+            if (chatState.sessionId) sessionActive = chatState.sessionId;
+            if (chatState.model) {
+                modelChoisi = chatState.model;
+                voirModel = true;
+                setTimeout(() => (voirModel = false), 3000);
+            }
+            rafraichirSession();
+            chatState.doneTrigger = 0;
+        }
+    });
 
-		// 2. Gestion de la fin de génération
-		if (chatState.doneTrigger > 0) {
-			attente = false;
-			if (chatState.sessionId) {
-				sessionActive = chatState.sessionId;
-			}
-			if (chatState.model) {
-				modelChoisi = chatState.model;
-				voirModel = true;
-				setTimeout(() => (voirModel = false), 3000);
-			}
-			rafraichirSession();
-			chatState.doneTrigger = 0; // Reset
-		}
-	});
+    async function sendMessage(e: Event | null) {
+        if (e) e.preventDefault();
+        if (currentMessage.trim() === '' && !selectedFile) return;
 
-	async function sendMessage(e: Event | null) {
-		if (e) e.preventDefault();
-		if (currentMessage.trim() === '' && !selectedFile) return;
+        attente = true;
+        const promptFinall = currentMessage || (previewUrl ? 'Décris cette image.' : '');
+        const imageAffiche = previewUrl;
 
-		attente = true;
+        messages = [{ role: 'user', think: '', content: promptFinall, image: imageAffiche, status: '' }, ...messages];
+        messages = [{ role: 'assistant', think: '', content: '', status: 'Analyse en cours...' }, ...messages];
 
-		// Préparation de l'interface (on affiche l'image si elle existe)
-		const promptFinall = currentMessage || (previewUrl ? 'Décris cette image.' : '');
-		const imageAffiche = previewUrl;
+        const promptToSend = currentMessage;
+        const fileToSend = selectedFile;
 
-		messages = [
-			{ role: 'user', think: '', content: promptFinall, image: imageAffiche, status: '' },
-			...messages
-		];
-		messages = [
-			{ role: 'assistant', think: '', content: '', status: 'Analyse en cours...' },
-			...messages
-		];
+        currentMessage = '';
+        clearImage(); 
 
-		const promptToSend = currentMessage;
-		const fileToSend = selectedFile;
+        if (fileToSend) {
+            console.log('🚀 Envoi multimodal via HTTP...');
+            const formData = new FormData();
+            formData.append('prompt', promptToSend || 'Décris cette image.');
+            formData.append('image', fileToSend);
+            
+            // 🎯 AJOUT DU USER_ID REQUIS PAR FASTAPI
+            formData.append('user_id', $currentUser || ''); 
+            
+            if (sessionActive) formData.append('session_id', sessionActive.toString());
 
-		// Nettoyage de l'input
-		currentMessage = '';
-		clearImage(); // On enlève la preview
+            try {
+                // Pointage direct vers FastAPI ou via ton proxy, selon ton architecture
+                const response = await fetch(`${API_URL}/api/multimodal`, { method: 'POST', body: formData });
 
-		// --- ROUTAGE INTELLIGENT ---
-		if (fileToSend) {
-			// CAS 1 : IL Y A UNE IMAGE -> On utilise la route HTTP Multimodale
-			console.log('🚀 Envoi multimodal via HTTP...');
-			const formData = new FormData();
-			formData.append('prompt', promptToSend || 'Décris cette image.');
-			formData.append('image', fileToSend);
-			if (sessionActive) formData.append('session_id', sessionActive.toString());
+                const newSessionId = response.headers.get('x-session-id');
+                if (newSessionId) sessionActive = parseInt(newSessionId);
 
-			try {
-				// IMPORTANT: Utilise le même handleStream que pour la voix !
-				// Tu devras peut-être adapter légèrement comment tu appelles le fetch
-				// si tu passes par ton proxy SvelteKit +server.ts (ce que je recommande)
-				// Voici l'exemple d'appel direct pour la démo :
-				const response = await fetch('/api/multimodal', { method: 'POST', body: formData });
+                const reader = response.body?.getReader();
+                if (reader) {
+                    await handleStream(reader, (think, content, status) => {
+                        messages[0].think = think;
+                        messages[0].content = content;
+                        messages[0].status = status;
+                    });
+                }
+            } catch (err) {
+                console.error('Erreur envoi image:', err);
+                messages[0].content = "Erreur lors de l'envoi de l'image.";
+            } finally {
+                attente = false;
+                rafraichirSession();
+            }
+        } else {
+            console.log('🚀 Envoi texte via WebSocket...');
+            chatState.sessionId = sessionActive;
+            
+            // 🎯 ENVOI DU TEXTE (L'injection du user_id se fera dans $lib/websocket.svelte)
+            sendWsMessage(promptToSend);
+        }
+    }
 
-				// Gestion des headers de session (comme pour le STT)
-				const newSessionId = response.headers.get('x-session-id');
-				if (newSessionId) sessionActive = parseInt(newSessionId);
+    async function ChargerConversation(id: number) {
+        if (attente) return;
+        sessionActive = id;
+        chatState.sessionId = id;
 
-				const reader = response.body?.getReader();
-				if (reader) {
-					// On réutilise ta super fonction de tri !
-					await handleStream(reader, (think, content, status) => {
-						messages[0].think = think;
-						messages[0].content = content;
-						messages[0].status = status;
-					});
-				}
-			} catch (err) {
-				console.error('Erreur envoi image:', err);
-				messages[0].content = "Erreur lors de l'envoi de l'image.";
-			} finally {
-				attente = false;
-				rafraichirSession();
-			}
-		} else {
-			// CAS 2 : TEXTE SEUL -> On utilise le WebSocket (rapide)
-			console.log('🚀 Envoi texte via WebSocket...');
-			chatState.sessionId = sessionActive;
-			sendWsMessage(promptToSend);
-			// Note : 'attente' sera remis à false par l'effet qui surveille chatState.doneTrigger
-		}
-	}
+        // 🔗 Appel direct à FastAPI
+        const res = await fetch(`${API_URL}/history/${id}`);
+        if (res.ok) {
+            const data = await res.json();
+            messages = data.map((msg: MessageBDD) => {
+                let imageFinale = null;
+                if (msg.image) imageFinale = API_URL + msg.image;
 
-	async function ChargerConversation(id: number) {
-		if (attente) return;
+                return {
+                    role: msg.role,
+                    content: msg.content,
+                    think: '',
+                    status: '',
+                    image: imageFinale
+                };
+            }).reverse();
+        }
+    }
 
-		console.log('🔵 Tentative de chargement de la session :', id);
-		sessionActive = id;
-		chatState.sessionId = id;
+    async function rafraichirSession() {
+        if (!$currentUser) return;
+        
+        // 🎯 On ne récupère que l'historique de l'utilisateur connecté !
+        const h = await fetch(`${API_URL}/history?user_id=${$currentUser}`);
+        if (h.ok) {
+            historiques = await h.json();
+        }
+    }
 
-		const res = await fetch(`api/historique/${id}`);
-		if (res.ok) {
-			const data = await res.json();
-
-			messages = data
-				.map((msg: MessageBDD) => {
-					// --- L'ASTUCE EST ICI ---
-					// Si le message a une image (de la BDD), on lui accroche l'IP de Python
-					let imageFinale = null;
-					if (msg.image) {
-						imageFinale = env.PUBLIC_URL_SERVEUR_PYTHON + msg.image;
-					}
-
-					return {
-						role: msg.role,
-						content: msg.content,
-						think: '',
-						status: '',
-						image: imageFinale
-					};
-				})
-				.reverse();
-
-			console.log('🟢 Interface mise à jour avec', messages.length, 'messages');
-		} else {
-			console.error('🔴 Erreur serveur Python :', res.status);
-		}
-	}
-
-	async function rafraichirSession() {
-		const h = await fetch('/api/historique');
-		if (h.ok) {
-			historiques = await h.json();
-		}
-	}
-
-	function nouveauChat() {
-		sessionActive = null;
-		messages = [
-			{
-				role: 'assistant',
-				think: '',
-				content: "Nouvelle discussion ! Comment puis-je t'aider ?",
-				status: ''
-			}
-		];
-	}
+    function nouveauChat() {
+        sessionActive = null;
+        messages = [
+            {
+                role: 'assistant',
+                think: '',
+                content: `Nouvelle discussion ! Comment puis-je t'aider ${$currentUser} ?`,
+                status: ''
+            }
+        ];
+    }
 </script>
+
 
 <div class="container-global">
 	<div class="historique-windows">
