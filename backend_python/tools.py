@@ -9,7 +9,7 @@ from qdrant_client.http import models
 from ollama import AsyncClient
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-
+import inspect
 SKILLS_DIR = "skills"
 
 # Connexions locales pour le JIT
@@ -168,14 +168,16 @@ async def get_relevant_tools(query: str, limit: int = 5, threshold: float = 0.5)
         
         for hit in results.points:
             manifest = None
-            if hasattr(hit, 'payload') and hit.payload:
-                manifest = hit.payload.get("manifest")
+            
+            # Extraction sûre : on récupère le payload s'il existe, sinon None
+            payload = getattr(hit, "payload", None)
+            
+            # Si le payload est bien un dictionnaire, on extrait le manifest
+            if isinstance(payload, dict):
+                manifest = payload.get("manifest")
+            # Fallback de sécurité au cas où Qdrant renvoie un dictionnaire direct
             elif isinstance(hit, dict) and "payload" in hit:
                 manifest = hit["payload"].get("manifest")
-            elif isinstance(hit, tuple):
-                for element in hit:
-                    if isinstance(element, dict) and "manifest" in element:
-                        manifest = element["manifest"]
             
             if manifest:
                 tools_list.append({
@@ -189,7 +191,8 @@ async def get_relevant_tools(query: str, limit: int = 5, threshold: float = 0.5)
     print(f"⚡ [JIT Unifié] Outils sélectionnés par l'IA ({len(tools_list)}/{limit}) : {tool_names}")
     return tools_list
 
-async def call_tool_execution(tool_name: str, arguments: dict):
+# 👤 AJOUT du paramètre user_id avec "invite" par défaut
+async def call_tool_execution(tool_name: str, arguments: dict, user_id: str = "invite"):
     """Exécute l'outil (Route MCP ou Route Locale)."""
     
     # 🌐 ROUTE 1 : C'est un outil MCP !
@@ -214,7 +217,6 @@ async def call_tool_execution(tool_name: str, arguments: dict):
         server_params = StdioServerParameters(
             command=config["command"],
             args=config.get("args", []),
-            # Toujours resolved_env ici
             env={**os.environ, **resolved_env}
         )
         
@@ -225,42 +227,48 @@ async def call_tool_execution(tool_name: str, arguments: dict):
                     await session.initialize()
                     result = await session.call_tool(real_tool_name, arguments)
                     
-                    if result.content and len(result.content) > 0:
-                        texte_resultat = result.content[0].text
+                    if result.content:
+                        texte_resultat = ""
+                        # On parcourt tous les blocs renvoyés par l'outil
+                        for block in result.content:
+                            # Si le bloc se déclare comme étant du texte
+                            if getattr(block, "type", "") == "text":
+                                # On extrait la propriété "text" dynamiquement pour rassurer Pyright
+                                contenu_texte = getattr(block, "text", "")
+                                texte_resultat += str(contenu_texte)
+                                
+                        if texte_resultat:
                         
                         # ==========================================
-                        # 🧠 L'INTERCEPTEUR DE MÉMOIRE (AUTO-CACHE)
+                        # 🧠 L'INTERCEPTEUR DE MÉMOIRE (AUTO-CACHE GLOBAL)
                         # ==========================================
-                        if server_name in ["brave-search", "world_monitor", "puppeteer", "meteo"]:
-                            try:
-                                print(f"💾 [Auto-Cache] Enregistrement du savoir depuis '{server_name}'...")
-                                date_actuelle = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                
-                                # On limite la taille pour ne pas saturer le vecteur Qdrant (1500 caractères)
-                                extrait = texte_resultat[:1500] 
-                                texte_a_memoriser = f"Date de l'info: {date_actuelle} | Source: {server_name} | Requête: {arguments} | Contenu: {extrait}"
-                                
-                                # 1. On vectorise le texte
-                                vector = await _get_tool_embedding(texte_a_memoriser)
-                                
-                                # 2. On l'envoie silencieusement dans Qdrant
-                                await qdrant.upsert(
-                                    collection_name="jean_heude_knowledge",
-                                    points=[models.PointStruct(
-                                        id=str(uuid.uuid4()), 
-                                        vector=vector, 
-                                        payload={
-                                            "source": server_name, 
-                                            "date": date_actuelle, 
-                                            "contenu": texte_a_memoriser
-                                        }
-                                    )]
-                                )
-                                print("✅ [Auto-Cache] Savoir stocké pour l'éternité !")
-                            except Exception as mem_err:
-                                print(f"⚠️ Erreur lors de la mémorisation automatique : {mem_err}")
+                            if server_name in ["brave-search", "world_monitor", "puppeteer", "meteo"]:
+                                try:
+                                    print(f"💾 [Auto-Cache] Enregistrement du savoir Global depuis '{server_name}'...")
+                                    date_actuelle = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    
+                                    extrait = texte_resultat[:1500] 
+                                    texte_a_memoriser = f"Date de l'info: {date_actuelle} | Source: {server_name} | Requête: {arguments} | Contenu: {extrait}"
+                                    
+                                    vector = await _get_tool_embedding(texte_a_memoriser)
+                                    
+                                    # Sauvegarde dans le Savoir Universel (sans user_id)
+                                    await qdrant.upsert(
+                                        collection_name="jean_heude_knowledge",
+                                        points=[models.PointStruct(
+                                            id=str(uuid.uuid4()), 
+                                            vector=vector, 
+                                            payload={
+                                                "source": server_name, 
+                                                "date": date_actuelle, 
+                                                "contenu": texte_a_memoriser
+                                            }
+                                        )]
+                                    )
+                                    print("✅ [Auto-Cache] Savoir Universel stocké !")
+                                except Exception as mem_err:
+                                    print(f"⚠️ Erreur lors de la mémorisation automatique : {mem_err}")
 
-                        # On n'oublie pas de renvoyer le texte à Jean-Heude pour qu'il puisse répondre !
                         return texte_resultat
                         
                     return "✅ Outil MCP exécuté avec succès (pas de retour texte)."
@@ -283,8 +291,19 @@ async def call_tool_execution(tool_name: str, arguments: dict):
                         return f"Erreur: Le script main.py est manquant dans {skill_folder}."
                     try:
                         spec = importlib.util.spec_from_file_location(tool_name, script_path)
+                        # Le garde-fou pour Pyright :
+                        if spec is None or spec.loader is None:
+                            return f"Erreur: Impossible d'initialiser le module {tool_name}."
+                            
                         module = importlib.util.module_from_spec(spec)
                         spec.loader.exec_module(module)
+                        # 🪄 INJECTION MAGIQUE DU USER_ID POUR LES OUTILS LOCAUX
+                        if hasattr(module, "run"):
+                            sig = inspect.signature(module.run)
+                            # Si le développeur a mis "user_id" dans les paramètres de son outil, on lui donne !
+                            if "user_id" in sig.parameters:
+                                arguments["user_id"] = user_id
+                                
                         return await module.run(**arguments)
                     except Exception as e:
                         return f"Erreur lors de l'exécution du skill {tool_name}: {str(e)}"

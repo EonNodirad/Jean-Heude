@@ -1,6 +1,6 @@
 # agent_runner.py
 import aiosqlite
-import memory
+import memory_IA as memory
 import re
 import os
 import tools
@@ -10,6 +10,7 @@ from ollama import AsyncClient
 from functools import wraps
 import graph_memory
 from qdrant_client.http import models
+from typing import Any
 
 def session_guard(func):
     """Garantit que chaque agent dispose d'un espace de travail isolé."""
@@ -85,7 +86,11 @@ class AgentRunner:
             f"S'il n'y a rien d'important, réponds 'AUCUN'.\n\nHistorique:\n{middle_text}"
         )
         res_facts = await self.admin_client.chat(model=self.admin_model, messages=[{"role": "user", "content": flush_prompt}])
-        facts = res_facts.message.content.strip()
+        
+        # ✅ EXTRACTION SÉCURISÉE (Safe String)
+        facts_content = getattr(res_facts.message, "content", "")
+        facts = facts_content.strip() if isinstance(facts_content, str) else ""
+        
         if "aucun" not in facts.lower() and len(facts) > 5:
             # ✅ CORRECTION : Écriture dans le BON dossier utilisateur
             user_dir = get_user_dir(user_id)
@@ -106,14 +111,18 @@ class AgentRunner:
         print("📉 [Context Guard] Création du résumé pour le prompt...")
         compact_prompt = f"Résume cette partie de la conversation en 3 phrases maximum.\n\nHistorique:\n{middle_text}"
         res_compact = await self.admin_client.chat(model=self.admin_model, messages=[{"role": "user", "content": compact_prompt}])
-        summary = res_compact.message.content.strip()
+        
+        # ✅ EXTRACTION SÉCURISÉE (Safe String)
+        summary_content = getattr(res_compact.message, "content", "")
+        summary = summary_content.strip() if isinstance(summary_content, str) else ""
         
         compressed_history = head + [{"role": "system", "content": f"RÉSUMÉ DES ÉCHANGES PRÉCÉDENTS: {summary}"}] + tail
         
         print("✅ [Context Guard] Compaction mémoire terminée.")
         # On retourne la liste compressée pour l'envoyer au LLM
         return compressed_history
-    async def process_multimodal_chat(self, prompt: str, image_b64: str | None,image_path: str|None, session_id: int,user_id : str, stream_callback):
+
+    async def process_multimodal_chat(self, prompt: str, image_b64: str | None, image_path: str|None, session_id: int | None, user_id: str, stream_callback):
         print(f"⚙️ AgentRunner: Traitement multimodal pour session {session_id}")
         user_db_path = f"{get_user_dir(user_id)}/memoire.db"
         # 1. On charge l'historique directement depuis SQLite
@@ -126,8 +135,8 @@ class AgentRunner:
                         memory_context.append({"role": ligne[0], "content": ligne[1]})
         
         # 2. Le System Prompt spécifique à la vision
-        os_context = self._load_os_context()
-        graph_context = await graph_memory.graph_db.search_graph(prompt)
+        os_context = self._load_os_context(user_id)
+        graph_context = await graph_memory.graph_db.search_graph(prompt, user_id)
         
         system_prompt = {
             "role": "system",
@@ -140,7 +149,7 @@ class AgentRunner:
         }
         
         # 3. Message utilisateur avec l'image
-        user_message = {"role": "user", "content": prompt}
+        user_message: dict[str, Any] = {"role": "user", "content": prompt}
         if image_b64:
             user_message["images"] = [image_b64]
             print("🖼️ Image B64 injectée avec succès pour Qwen3-VL.")
@@ -185,27 +194,18 @@ class AgentRunner:
                         ("assistant", assistant_final_text.strip(), session_id, None)
                     )
                 await db.commit()
-    async def _recall_web_knowledge(self, query: str,user_id: str) -> str:
-        """Fouille dans la collection de savoir accumulé sur le web."""
+
+    async def _recall_web_knowledge(self, query: str) -> str:
+        """Fouille dans la collection de savoir accumulé sur le web (Base Commune)."""
         try:
-            # On utilise la fonction d'embedding que tu as déjà dans tools.py
             query_vector = await tools._get_tool_embedding(query)
             
-            # Recherche dans la collection "knowledge"
             results = await tools.qdrant.query_points(
                 collection_name="jean_heude_knowledge",
                 query=query_vector,
                 limit=5,
-                score_threshold=0.7,
-                # 🛡️ LE FILTRE MAGIQUE : Ne remonte que les infos de CE user_id
-                query_filter=models.Filter(
-                    must=[
-                        models.FieldCondition(
-                            key="user_id",
-                            match=models.MatchValue(value=user_id)
-                        )
-                    ]
-                )
+                score_threshold=0.7
+                # ❌ ON A RETIRÉ LE FILTRE : Il fouille dans les recherches de tout le monde !
             )
             
             if not results.points:
@@ -213,9 +213,13 @@ class AgentRunner:
 
             extracted = []
             for hit in results.points:
-                content = hit.payload.get("contenu", "")
-                date = hit.payload.get("date", "Date inconnue")
-                extracted.append(f"[Souvenir du {date}]: {content}")
+
+                payload = getattr(hit, "payload", None)
+                
+                if isinstance(payload, dict):
+                    content = payload.get("contenu", "")
+                    date = payload.get("date", "Date inconnue")
+                    extracted.append(f"[Souvenir du {date}]: {content}")
                 
             return "\n".join(extracted)
         except Exception as e:
@@ -246,7 +250,7 @@ class AgentRunner:
             graph_context = await graph_memory.graph_db.search_graph(text_content,user_id)
             
             # --- NOUVEAU : Récupération du savoir Web (Auto-Cache Qdrant) ---
-            web_context = await self._recall_web_knowledge(text_content, user_id)
+            web_context = await self._recall_web_knowledge(text_content)
             
             # --- NOUVEAU : Date dynamique pour éviter le bug "2023" ---
             date_actuelle = datetime.datetime.now().strftime("%A %d %B %Y à %H:%M:%S")
@@ -275,8 +279,8 @@ class AgentRunner:
             
             # Assemblage final des messages
             contexte_message = [{"role": "system", "content": system_content}]
-            contexte_message.extend([{"role": m[0], "content": m[1]} for m in reversed(lignes)])
-
+            
+            contexte_message.extend([{"role": m[0], "content": m[1]} for m in reversed(list(lignes))])
         # --- 4. DÉCLENCHEMENT DU CONTEXT GUARD (Compaction si nécessaire) ---
         current_tokens = self.count_tokens(contexte_message)
         if current_tokens > self.max_tokens:
