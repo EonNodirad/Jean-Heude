@@ -21,12 +21,33 @@ ollama_client = AsyncClient(host=os.getenv("URL_SERVER_OLLAMA"))
 # ==========================================
 
 def load_mcp_config():
-    """Charge la configuration YAML des serveurs MCP."""
+    """Charge la configuration YAML et résout les chemins relatifs dynamiquement."""
     path = "mcp_servers.yaml"
     if not os.path.exists(path):
         return {}
+        
     with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f).get("mcp_servers", {})
+        config_data = yaml.safe_load(f)
+        mcp_servers = config_data.get("mcp_servers", {})
+
+    # 🎯 RÉSOLUTION DYNAMIQUE DES CHEMINS
+    # Récupère le dossier absolu où se trouve mcp_servers.yaml (ex: /app ou C:\Projet)
+    base_dir = os.path.dirname(os.path.abspath(path))
+
+    for server_name, config in mcp_servers.items():
+        if "args" in config and isinstance(config["args"], list):
+            new_args = []
+            for arg in config["args"]:
+                # Si l'argument est un chemin relatif commençant par ./
+                if isinstance(arg, str) and arg.startswith("./"):
+                    # On le transforme en chemin absolu basé sur l'emplacement du YAML
+                    abs_path = os.path.normpath(os.path.join(base_dir, arg))
+                    new_args.append(abs_path)
+                else:
+                    new_args.append(arg)
+            config["args"] = new_args
+            
+    return mcp_servers
 
 async def get_mcp_tools() -> list:
     """Se connecte dynamiquement aux serveurs MCP pour lister leurs outils."""
@@ -201,9 +222,12 @@ async def call_tool_execution(tool_name: str, arguments: dict, user_id: str = "i
         server_name = parts[0].replace("mcp_", "")
         real_tool_name = parts[1]
         
-        config = load_mcp_config().get(server_name)
+        # ✅ Utilise load_mcp_config() qui a maintenant les chemins résolus !
+        mcp_config = load_mcp_config()
+        config = mcp_config.get(server_name)
+        
         if not config:
-            return f"❌ Erreur : Le serveur MCP '{server_name}' n'existe plus dans le YAML."
+            return f"❌ Erreur : Le serveur MCP '{server_name}' n'existe plus."
             
         raw_env = config.get("env", {})
         resolved_env = {}
