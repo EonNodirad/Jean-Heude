@@ -36,3 +36,6 @@ __pycache__/
 .venv/
 
 backend_python/tts/model/tts/kokoro-v1.0.onnx
+
+neo4j_data/
+neo4j_logs/
