@@ -9,15 +9,15 @@ mcp_servers:
   puppeteer:
     command: node
     args:
-    - ./puppeteer_mcp/node_modules/@modelcontextprotocol/server-puppeteer/dist/index.js
+    - ./mcp_servers_prive/puppeteer_mcp/node_modules/@modelcontextprotocol/server-puppeteer/dist/index.js
   world_monitor: 
     command: node 
     args:
-    - ./world_monitor_mcp/index.js
+    - ./mcp_servers_prive/world_monitor_mcp/index.js
     env:
       WORLD_MONITOR_URL: ${WORLD_MONITOR_URL} 
   meteo:
     command: node
     args:
-    - ./meteo_mcp/index.js
+    - ./mcp_servers_prive/meteo_mcp/index.js
     env: {}
