@@ -28,9 +28,9 @@ COPY . .
 
 # 4. Installation des dépendances Node pour chaque MCP
 # On boucle sur tes dossiers pour faire un 'npm install' là où c'est nécessaire
-RUN cd meteo_mcp && npm install || true
-RUN cd puppeteer_mcp && npm install || true
-RUN cd world_monitor_mcp && npm install || true
+RUN cd mcp_servers_prive/meteo_mcp && npm install || true
+RUN cd mcp_servers_prive/puppeteer_mcp && npm install || true
+RUN cd mcp_servers_prive/world_monitor_mcp && npm install || true
 
 # 5. Permissions et Dossiers
 RUN mkdir -p /app/memory/uploads /app/memory/users /app/skills
