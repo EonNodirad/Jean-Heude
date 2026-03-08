@@ -6,10 +6,11 @@ import asyncio
 from dotenv import load_dotenv
 
 load_dotenv()
-# Paramètres de connexion (qui correspondent au docker-compose)
-URI = os.getenv("NEO4J_URI")
-USER = os.getenv("NEO4J_USER")
-PASSWORD = os.getenv("NEO4J_PASSWORD")
+
+# ✅ CORRECTION 1 : On donne des valeurs par défaut (des strings) pour rassurer Pyright
+URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
+USER = os.environ.get("NEO4J_USER", "neo4j")
+PASSWORD = os.environ.get("NEO4J_PASSWORD", "password")
 AUTH = (USER, PASSWORD)
 
 class GraphManager:
@@ -32,37 +33,37 @@ class GraphManager:
             print(f"❌ [GraphRAG] Erreur de connexion à Neo4j : {e}")
             return False
     
-    async def insert_graph_data(self, data: dict):
-        """Injecte le JSON extrait par le LLM directement dans Neo4j."""
+    async def insert_graph_data(self, data: dict, user_id: str):
+        """Injecte le JSON extrait par le LLM directement dans Neo4j (ISOLÉ PAR USER)."""
         if not data.get("nodes") and not data.get("edges"):
             return
             
         async with self.driver.session() as session:
-            # 1. Création des Nœuds (Entités)
+            # 1. Création des Nœuds avec le user_id
             for node in data.get("nodes", []):
                 query = """
-                MERGE (n:Entite {id: $id})
+                MERGE (n:Entite {id: $id, user_id: $user_id})
                 SET n.type = $type
                 """
-                # On met tout en majuscules pour éviter les doublons (ex: "Python" vs "PYTHON")
-                await session.run(query, id=str(node["id"]).upper(), type=str(node["type"]).upper())
+                await session.run(query, id=str(node["id"]).upper(), type=str(node["type"]).upper(), user_id=user_id)
             
-            # 2. Création des Liens (Relations)
+            # 2. Création des Liens avec le user_id
             for edge in data.get("edges", []):
                 query = """
-                MATCH (a:Entite {id: $source})
-                MATCH (b:Entite {id: $target})
-                MERGE (a)-[r:RELATION {type: $rel_type}]->(b)
+                MATCH (a:Entite {id: $source, user_id: $user_id})
+                MATCH (b:Entite {id: $target, user_id: $user_id})
+                MERGE (a)-[r:RELATION {type: $rel_type, user_id: $user_id}]->(b)
                 """
                 await session.run(
                     query, 
                     source=str(edge["source"]).upper(), 
                     target=str(edge["target"]).upper(), 
-                    rel_type=str(edge["relation"]).upper()
+                    rel_type=str(edge["relation"]).upper(),
+                    user_id=user_id
                 )
-    async def search_graph(self, query: str) -> str:
-        """Cherche des entités dans le graphe et renvoie leur contexte."""
-        # On extrait les mots de plus de 3 lettres de la question pour chercher dans le graphe
+
+    async def search_graph(self, query: str, user_id: str) -> str:
+        """Cherche des entités dans le graphe UNIQUEMENT pour cet utilisateur."""
         mots_cles = [mot.upper() for mot in query.split() if len(mot) > 3]
         if not mots_cles:
             return ""
@@ -70,14 +71,14 @@ class GraphManager:
         contexte_trouve = ""
         async with self.driver.session() as session:
             for mot in mots_cles:
-                # Requête Cypher : Trouve le nœud, et ramène ses voisins directs
+                # 🛡️ FILTRE : On ne MATCH que les entités qui appartiennent à ce user_id
                 query_cypher = """
-                MATCH (n:Entite)-[r:RELATION]->(m:Entite)
+                MATCH (n:Entite {user_id: $user_id})-[r:RELATION]->(m:Entite {user_id: $user_id})
                 WHERE n.id CONTAINS $mot OR m.id CONTAINS $mot
                 RETURN n.id AS source, r.type AS relation, m.id AS target
                 LIMIT 5
                 """
-                result = await session.run(query_cypher, mot=mot)
+                result = await session.run(query_cypher, mot=mot, user_id=user_id)
                 records = await result.data()
                 
                 for record in records:
@@ -87,7 +88,8 @@ class GraphManager:
             return f"CONTEXTE GRAPHE (Ne le mentionne que si c'est utile) :\n{contexte_trouve}"
         return ""
 
-ollama_client = AsyncClient(host=os.getenv("URL_SERVER_OLLAMA"))
+# ✅ CORRECTION : Valeur par défaut pour l'URL Ollama
+ollama_client = AsyncClient(host=os.environ.get("URL_SERVER_OLLAMA", "http://localhost:11434"))
 
 async def extract_ontology(text: str) -> dict:
     """Demande au LLM d'extraire le graphe de connaissances du texte."""
@@ -101,16 +103,21 @@ Texte: {text}"""
 
     print("🧠 [GraphRAG] Extraction de l'ontologie en cours...")
     response = await ollama_client.chat(
-        model="llama3.1:8b", # Utilise ton modèle le plus rapide/intelligent ici
+        model="llama3.1:8b", 
         messages=[{"role": "user", "content": prompt}],
-        format="json" # MAGIQUE : Force la sortie en JSON valide
+        format="json" 
     )
     
     try:
-        return json.loads(response.message.content)
+        # ✅ CORRECTION 2 : On s'assure qu'il y a du texte avant de json.loads()
+        content = response.message.content
+        if not content:
+            return {"nodes": [], "edges": []}
+        return json.loads(content)
     except Exception as e:
         print(f"❌ [GraphRAG] Erreur de parsing JSON : {e}")
         return {"nodes": [], "edges": []}
+
 # Instance globale (Singleton) pour l'importer partout
 graph_db = GraphManager()
 
@@ -124,8 +131,8 @@ async def test_graph():
     donnees_extraites = await extract_ontology(texte_test)
     print("JSON Extrait :", json.dumps(donnees_extraites, indent=2))
     
-    # 2. On injecte dans la base
-    await graph_db.insert_graph_data(donnees_extraites)
+    # ✅ CORRECTION 3 : On ajoute un user_id bidon pour que le test fonctionne
+    await graph_db.insert_graph_data(donnees_extraites, user_id="test_user_01")
     await graph_db.close()
 
 if __name__ == "__main__":

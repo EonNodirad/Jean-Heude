@@ -9,18 +9,19 @@ from typing import AsyncGenerator, Any
 from dotenv import load_dotenv
 import tools
 from IA import Orchestrator
-import tools
 from ollama import AsyncClient
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models
 
 # --- Configurations Initiales ---
 load_dotenv()
-remote_host = os.getenv("URL_SERVER_OLLAMA")
-url_qdrant = os.getenv("URL_QDRANT")
-http_client = httpx.AsyncClient(timeout=20.0)
-TTS_SERVER_URL = os.getenv("TTS_SERVER_URL")
 
+# ✅ CORRECTION 1 : os.environ.get avec fallback (Pyright est content, c'est toujours un str)
+remote_host = os.environ.get("URL_SERVER_OLLAMA", "http://localhost:11434")
+url_qdrant = os.environ.get("URL_QDRANT", "localhost")
+TTS_SERVER_URL = os.environ.get("TTS_SERVER_URL", "http://localhost:5002/api/tts")
+
+http_client = httpx.AsyncClient(timeout=20.0)
 orchestrator = Orchestrator()
 client = AsyncClient(host=remote_host)
 model = "phi3:mini"
@@ -31,33 +32,25 @@ memory_lock = asyncio.Lock()
 # Client Qdrant
 client_qdrant = AsyncQdrantClient(host=url_qdrant, port=6333)
 
-# ----------------- NOUVEAU : GESTION HYBRIDE DE LA MÉMOIRE -----------------
-
-
-async def sync_memory_md():
-    """
-    Synchronise MEMORY.md vers SQLite (Mots-clés) et Qdrant (Sens vectoriel).
-    Si le fichier n'existe pas, on le crée proprement.
-    """
-    file_path = "memory/MEMORY.md"
+# 👤 AJOUT DU user_id
+async def sync_memory_md(user_id: str):
+    """Synchronise la mémoire spécifique de l'utilisateur."""
+    # ✅ CHEMINS DYNAMIQUES
+    user_dir = f"memory/users/{user_id}"
+    file_path = f"{user_dir}/system/MEMORY.md"
+    db_path = f"{user_dir}/memoire.db"
     
-    # 1. Si le fichier n'existe pas, on le crée avec une base vierge
     if not os.path.exists(file_path):
-        print("📝 Fichier MEMORY.md introuvable. Création de la mémoire...")
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
-            f.write("# Mémoire Long Terme de Jean-Heude\n\n")
+            f.write(f"# Mémoire Long Terme de {user_id}\n\n")
             f.write("- Je viens de me réveiller. Ma mémoire est encore vierge.\n")
-        
-        # Le fichier vient d'être créé, inutile de l'indexer tout de suite
         return
 
-    # 2. S'il existe, on le lit et on l'indexe (comme avant)
     with open(file_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
-    async with aiosqlite.connect("memory/memoire.db") as db:
-        # Nettoyage de l'ancien index
+    async with aiosqlite.connect(db_path) as db:
         await db.execute("DELETE FROM long_term_index")
         
         for line in lines:
@@ -68,21 +61,14 @@ async def sync_memory_md():
             vector = await tools._get_tool_embedding(content)
             v_id = str(uuid.uuid4())
             
-            # Stockage Sémantique
+            # 🛡️ AJOUT DU PAYLOAD user_id
             await client_qdrant.upsert(
                 collection_name="jean_heude_memories",
-                points=[models.PointStruct(id=v_id, vector=vector, payload={"text": content})]
+                points=[models.PointStruct(id=v_id, vector=vector, payload={"text": content, "user_id": user_id})]
             )
 
-            # Stockage SQL
-            await db.execute(
-                "INSERT INTO long_term_index (chunk_text, vector_id) VALUES (?, ?)",
-                (content, v_id)
-            )
+            await db.execute("INSERT INTO long_term_index (chunk_text, vector_id) VALUES (?, ?)", (content, v_id))
         await db.commit()
-    print("✅ Index hybride (SQLite/Qdrant) synchronisé avec MEMORY.md")
-
-# ----------------- FIN DE LA NOUVELLE GESTION -----------------
 
 
 async def cleanup_audio_store():
@@ -106,7 +92,6 @@ def clean_text_for_tts(text):
     text = re.sub(r'[\*\#\_\[\]\(\)\`]', '', text)
     text = text.replace('\n', ' ')
     return text.strip()
-
 
 
 async def decide_model(message:str):
@@ -163,7 +148,7 @@ async def pre_generate_audio(audio_id, text):
             audio_store[audio_id]["event"].set()
 
 
-# ----------------- MISE À JOUR : RECHERCHE HYBRIDE -----------------
+# ----------------- RECHERCHE HYBRIDE -----------------
 
 async def chat_with_memories(history: list, chosen_model: str, user_id: str = "default_user") -> AsyncGenerator[str,Any]:
     
@@ -174,29 +159,32 @@ async def chat_with_memories(history: list, chosen_model: str, user_id: str = "d
         memories_list = []
         
         # 1. Recherche par SENS (Qdrant)
+        # 1. Recherche par SENS (Qdrant)
         try:
             vector = await tools._get_tool_embedding(last_user_message)
             v_results = await client_qdrant.query_points(
                 collection_name="jean_heude_memories",
                 query=vector,
-                limit=5
+                limit=5,
+                query_filter=models.Filter(
+                    must=[models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id))]
+                )
             )
             for hit in v_results.points:
-                if hasattr(hit, 'payload') and hit.payload:
-                    # Cas 1 : C'est un bel objet
-                    text = hit.payload.get("text")
-                    if text:
-                        memories_list.append(text)
-                elif isinstance(hit, dict) and "payload" in hit:
-                    # Cas 2 : C'est un dictionnaire brut
-                    text = hit["payload"].get("text")
-                    if text: 
-                        memories_list.append(text)
-                elif isinstance(hit, tuple):
-                    # Cas 3 : C'est un tuple (ton cas actuel). Le payload est le dictionnaire caché dedans !
-                    for element in hit:
-                        if isinstance(element, dict) and "text" in element:
-                            memories_list.append(element["text"])
+                # Extraction propre (Type-Safe pour Pyright)
+                payload = getattr(hit, "payload", None)
+                text = None
+                
+                if isinstance(payload, dict):
+                    text = payload.get("text")
+                elif isinstance(hit, dict):
+                    payload_dict = hit.get("payload")
+                    if isinstance(payload_dict, dict):
+                        text = payload_dict.get("text")
+                        
+                if isinstance(text, str) and text.strip():
+                    memories_list.append(text.strip())
+                    
         except Exception as e:
             print(f"⚠️ Erreur Qdrant : {e}")
 
@@ -205,7 +193,8 @@ async def chat_with_memories(history: list, chosen_model: str, user_id: str = "d
         if keywords:
             sql_query = "SELECT chunk_text FROM long_term_index WHERE " + " OR ".join(["chunk_text LIKE ?"] * len(keywords))
             params = [f"%{k}%" for k in keywords]
-            async with aiosqlite.connect("memory/memoire.db") as db:
+            # ✅ CHEMIN DYNAMIQUE
+            async with aiosqlite.connect(f"memory/users/{user_id}/memoire.db") as db:
                 async with db.execute(sql_query, params) as cursor:
                     k_results = await cursor.fetchall()
                     for row in k_results:
@@ -226,14 +215,12 @@ async def chat_with_memories(history: list, chosen_model: str, user_id: str = "d
     
     for msg in history:
         if msg["role"] == "system" and not system_merged:
-            # On combine le contexte d'AgentRunner (Date, Web, Graph) avec les souvenirs d'ici
             nouveau_contenu = msg["content"] + "\n\n" + bloc_souvenirs + "\nTu es Jean-Heude, un assistant personnel franc et objectif. Réponds de manière claire et naturelle."
             messages.append({"role": "system", "content": nouveau_contenu})
             system_merged = True
         else:
             messages.append(msg)
             
-    # Sécurité au cas où il n'y aurait pas de system prompt
     if not system_merged:
         messages.insert(0, {"role": "system", "content": f"Tu es Jean-Heude.\n{bloc_souvenirs}"})
 
@@ -241,19 +228,22 @@ async def chat_with_memories(history: list, chosen_model: str, user_id: str = "d
     
     available_tools = await tools.get_relevant_tools(last_user_message, limit=20)
 
-    async for chunk in execute_agent_loop(messages, chosen_model, available_tools):
+    async for chunk in execute_agent_loop(messages, chosen_model, available_tools, user_id=user_id):
         if not chunk.startswith("¶") and not chunk.startswith("||AUDIO_ID:"):
             assistant_final_text += chunk
         yield chunk
 
-# ----------------- LE RESTE EST INTACT -----------------
 
-async def execute_agent_loop(messages: list, chosen_model: str, available_tools: list, mute_audio: bool =False) -> AsyncGenerator[str, Any]:
+async def execute_agent_loop(messages: list, chosen_model: str, available_tools: list, mute_audio: bool = False, user_id: str = "invite") -> AsyncGenerator[str, Any]:
     assistant_full_response = ""
     buffer_audio = ""
     is_in_hidden_thought = False
-    caps = await orchestrator.get_model_details(chosen_model)
     
+    caps = await orchestrator.get_model_details(chosen_model)
+    # ✅ CORRECTION 2 : Filet de sécurité au cas où l'orchestrateur renvoie None
+    if not caps:
+        caps = {'can_think': False, 'can_use_tools': False}
+        
     print(f" Jean-Heude utilise {chosen_model} | Think: {caps['can_think']} | Tools: {caps['can_use_tools']}")
     try:
         current_tools = available_tools if caps['can_use_tools'] else None
@@ -263,7 +253,8 @@ async def execute_agent_loop(messages: list, chosen_model: str, available_tools:
                 messages=messages,
                 tools=current_tools,
                 stream=True,
-                think=caps['can_think'],
+                # On passe None au lieu de False si le modèle ne supporte pas explicitement "think" selon la version d'Ollama
+                think=caps.get('can_think', False),
             )
 
             thinking = ''
@@ -272,37 +263,40 @@ async def execute_agent_loop(messages: list, chosen_model: str, available_tools:
             done_thinking = False
 
             async for chunk in stream:
-                if chunk.message.thinking:
-                    thinking += chunk.message.thinking
-                    yield f"¶{chunk.message.thinking}"
+                # 1. Traitement de la pensée (Safe String)
+                chunk_thinking = getattr(chunk.message, "thinking", None)
+                if isinstance(chunk_thinking, str):
+                    thinking += chunk_thinking
+                    yield f"¶{chunk_thinking}"
                 
-                if chunk.message.content:
+                # 2. Traitement du contenu (Safe String)
+                chunk_content = getattr(chunk.message, "content", None)
+                if isinstance(chunk_content, str):
                     if not done_thinking:
                         done_thinking = True
                     
-                    text_chunk = chunk.message.content
-                    content += text_chunk
-                    assistant_full_response += text_chunk
-                    yield text_chunk
+                    content += chunk_content
+                    assistant_full_response += chunk_content
+                    yield chunk_content
 
-                    if "<think>" in text_chunk:
+                    if "<think>" in chunk_content:
                         is_in_hidden_thought = True
                         yield "¶" 
                         continue 
                     
-                    if "</think>" in text_chunk:
+                    if "</think>" in chunk_content:
                         is_in_hidden_thought = False
                         continue
 
                     if is_in_hidden_thought:
-                        yield f"¶{text_chunk}" 
+                        yield f"¶{chunk_content}" 
                         continue
 
                     if not mute_audio and not is_in_hidden_thought:
-                        clean_for_audio = text_chunk.replace("<think>", "").replace("</think>", "")
+                        clean_for_audio = chunk_content.replace("<think>", "").replace("</think>", "")
                         buffer_audio += clean_for_audio
                         
-                        if any(p in text_chunk for p in [".", "!", "?", "\n", ";", ","]) or len(buffer_audio) > 40:
+                        if any(p in chunk_content for p in [".", "!", "?", "\n", ";", ","]) or len(buffer_audio) > 40:
                             if len(buffer_audio.strip()) > 5:
                                 audio_id, _ = prepare_audio_slot()
                                 phrase = clean_text_for_tts(buffer_audio)
@@ -310,10 +304,12 @@ async def execute_agent_loop(messages: list, chosen_model: str, available_tools:
                                 yield f"||AUDIO_ID:{audio_id}||"
                                 buffer_audio = ""
 
-                if chunk.message.tool_calls:
-                    tool_calls.extend(chunk.message.tool_calls)
+                # 3. Traitement des appels d'outils (Safe Iterable)
+                chunk_tools = getattr(chunk.message, "tool_calls", None)
+                if chunk_tools is not None:
+                    tool_calls.extend(chunk_tools)
                     await asyncio.sleep(0.01)
-
+                    
             messages.append({'role': 'assistant', 'thinking': thinking, 'content': content, 'tool_calls': tool_calls})
 
             if not tool_calls:
@@ -330,7 +326,7 @@ async def execute_agent_loop(messages: list, chosen_model: str, available_tools:
                     asyncio.create_task(pre_generate_audio(status_audio_id, text_clean))
                     yield f"||AUDIO_ID:{status_audio_id}||"
 
-                result = await tools.call_tool_execution(call.function.name, call.function.arguments)
+                result = await tools.call_tool_execution(call.function.name, call.function.arguments, user_id)
 
                 messages.append({
                     'role': 'tool',
@@ -347,6 +343,3 @@ async def execute_agent_loop(messages: list, chosen_model: str, available_tools:
 
     except Exception as e:
         yield f"Erreur dans la boucle agentique : {str(e)}"
-
-
-
