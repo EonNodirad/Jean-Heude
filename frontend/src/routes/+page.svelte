@@ -196,7 +196,7 @@
         chatState.sessionId = id;
 
         // 🔗 Appel direct à FastAPI
-        const res = await fetch(`${API_URL}/history/${id}`);
+        const res = await fetch(`${API_URL}/history/${id}?user_id=${$currentUser}`);
         if (res.ok) {
             const data = await res.json();
             messages = data.map((msg: MessageBDD) => {

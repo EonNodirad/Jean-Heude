@@ -15,9 +15,9 @@ from typing import Any
 def session_guard(func):
     """Garantit que chaque agent dispose d'un espace de travail isolé."""
     @wraps(func)
-    async def wrapper(self, text_content: str, session_id: int | None, on_token_callback, **kwargs):
-        print(f"🛡️ [Session Guard] Isolation de la session {session_id or 'Nouvelle'}")
-        return await func(self, text_content, session_id, on_token_callback, **kwargs)
+    async def wrapper(self, text_content: str, session_id: int | None, user_id: str, on_token_callback, **kwargs):
+        print(f"🛡️ [Session Guard] Isolation de la session {session_id or 'Nouvelle'} pour l'utilisateur {user_id}")
+        return await func(self, text_content, session_id,user_id, on_token_callback, **kwargs)
     return wrapper
 
 def get_user_dir(user_id: str) -> str:
@@ -197,6 +197,9 @@ class AgentRunner:
 
     async def _recall_web_knowledge(self, query: str) -> str:
         """Fouille dans la collection de savoir accumulé sur le web (Base Commune)."""
+        if not query or not query.strip():
+            return ""
+
         try:
             query_vector = await tools._get_tool_embedding(query)
             

@@ -40,24 +40,57 @@ async def watch_tools_changes():
         print(f"🔄 [Auto-Watch] Modification détectée : {changes}. Mise à jour...")
         await tools.sync_skills_to_qdrant()
 
+# ==========================================
+# 🛡️ GARDE-FRONTIÈRE BDD UTILISATEURS
+# ==========================================
+async def get_and_init_user_db(user_id: str) -> str:
+    """Retourne le chemin de la BDD de l'utilisateur et s'assure qu'elle est à jour."""
+    db_path = f"memory/users/{user_id}/memoire.db"
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("""CREATE TABLE IF NOT EXISTS historique_chat (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            timestamp TIMESTAMP, 
+            resume TEXT, 
+            userID TEXT
+        )""")
+        
+        await db.execute("""CREATE TABLE IF NOT EXISTS memory_chat (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            role TEXT, 
+            content TEXT, 
+            timestamp TIMESTAMP, 
+            sessionID INTEGER,
+            image TEXT
+        )""")
+        
+        await db.execute("""CREATE TABLE IF NOT EXISTS long_term_index (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chunk_text TEXT,
+            vector_id TEXT
+        )""")
+        
+        try:
+            await db.execute("ALTER TABLE memory_chat ADD COLUMN image TEXT")
+        except Exception:
+            pass
+            
+        await db.commit()
+        
+    return db_path
+
+# ==========================================
+# 🚀 LIFESPAN (Démarrage du serveur)
+# ==========================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("🚀 Initialisation de Jean-Heude...")
     
-    # ✅ Initialisation de la base d'authentification
+    # 1. Base d'authentification globale
     init_auth_db()
-    
-    async with aiosqlite.connect("memory/memoire.db") as db:
-        await db.execute("CREATE TABLE IF NOT EXISTS memory_chat (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT, timestamp TIMESTAMP, sessionID INTEGER)")
-        await db.execute("CREATE TABLE IF NOT EXISTS historique_chat (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TIMESTAMP, resume TEXT, userID TEXT)")
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS long_term_index (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chunk_text TEXT,
-                vector_id TEXT
-            )""")
-        await db.commit()
 
+    # 2. Collection vectorielle globale
     try:
         await memory.client_qdrant.get_collection("jean_heude_memories")
     except Exception:
@@ -67,12 +100,17 @@ async def lifespan(app: FastAPI):
             vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE),
         )
 
+    # 3. Synchronisation par utilisateur
     users_dir = "memory/users"
     if os.path.exists(users_dir):
         for user_folder in os.listdir(users_dir):
             if os.path.isdir(os.path.join(users_dir, user_folder)):
-                print(f"🔄 Synchro de la mémoire pour l'utilisateur : {user_folder}...")
+                print(f"🔄 Initialisation de la base de données pour : {user_folder}...")
+                await get_and_init_user_db(user_folder)
+                print(f"📖 Synchro de la mémoire Markdown pour : {user_folder}...")
                 await memory.sync_memory_md(user_folder)
+                
+    # 4. Chargement des Outils
     await tools.sync_skills_to_qdrant()
     
     print("✅ Jean-Heude est prêt !")
@@ -81,15 +119,18 @@ async def lifespan(app: FastAPI):
     yield
     print("💤 Extinction...")
 
-if not os.path.exists("memory"):
-    os.makedirs("memory")
+# ==========================================
+# ⚙️ INITIALISATION FASTAPI
+# ==========================================
+if not os.path.exists("memory/users"):
+    os.makedirs("memory/users")
 
 app = FastAPI(lifespan=lifespan)
 agent_runner = AgentRunner()
 gateway = Gateway(agent_runner)
 
-os.makedirs("memory/uploads", exist_ok=True)
-app.mount("/api/uploads", StaticFiles(directory="memory/uploads"), name="uploads")
+# 🎯 MONTAGE STATIQUE ISOLÉ PAR UTILISATEUR
+app.mount("/api/users", StaticFiles(directory="memory/users"), name="users_media")
 
 app.add_middleware(
     CORSMiddleware,
@@ -131,7 +172,6 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         while True:
             data = await websocket.receive_json()
             
-            # SÉCURITÉ WEBSOCKET : On s'assure que Svelte a envoyé le user_id
             if isinstance(data, dict) and not data.get("user_id"):
                 await websocket.send_json({"type": "error", "content": "Non autorisé. Veuillez vous reconnecter."})
                 continue
@@ -141,22 +181,21 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         gateway.disconnect(client_id)
 
 # ==========================================
-# 🗃️ ROUTES HISTORIQUE (Sécurisées Multi-Tenant)
+# 🗃️ ROUTES HISTORIQUE
 # ==========================================
 @app.get("/history")
 async def get_historique_list(user_id: str):
-    """Récupère l'historique UNIQUEMENT pour l'utilisateur connecté"""
-    async with aiosqlite.connect("memory/memoire.db") as db:
+    db_path = await get_and_init_user_db(user_id)
+    async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
-        # 🛡️ SÉCURITÉ : WHERE userID = ?
-        async with db.execute("SELECT id, resume, timestamp FROM historique_chat WHERE userID = ? ORDER BY timestamp DESC", (user_id,)) as cursor:
-            lignes = await cursor.fetchall()
-            return [{"id": ligne["id"], "resume": ligne["resume"], "timestamp": ligne["timestamp"]} for ligne in lignes]
+        cursor = await db.execute("SELECT id, resume, timestamp FROM historique_chat ORDER BY timestamp DESC")
+        lignes = await cursor.fetchall()
+        return [{"id": ligne["id"], "resume": ligne["resume"], "timestamp": ligne["timestamp"]} for ligne in lignes]
 
 @app.get("/history/{session_id}")
-async def get_history(session_id: int):
-    # Note: On pourrait ajouter une vérification pour s'assurer que la session appartient bien au user_id
-    async with aiosqlite.connect("memory/memoire.db") as db:
+async def get_history(session_id: int, user_id: str):
+    db_path = await get_and_init_user_db(user_id)
+    async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
         cursor = await db.execute(
             "SELECT role, content, image FROM memory_chat WHERE sessionID = ? ORDER BY timestamp ASC",
@@ -172,7 +211,7 @@ async def get_history(session_id: int):
 async def voice_endpoint(
     file: UploadFile = File(...), 
     session_id: str | None = Form(None),
-    user_id: str = Form(...) # 🎯 REQUIS !
+    user_id: str = Form(...) 
 ):
     audio_binary = await file.read()
     text_transcribed = ""
@@ -190,10 +229,10 @@ async def voice_endpoint(
     if not text_transcribed:
         return {"error": "Aucune parole détectée"}
 
-    if session_id is None or session_id == 'null' or session_id == 'undefined':
-        async with aiosqlite.connect("memory/memoire.db") as db:
+    if session_id is None or session_id in ('null', 'undefined'):
+        db_path = await get_and_init_user_db(user_id)
+        async with aiosqlite.connect(db_path) as db:
             resume = text_transcribed[:30] + "..."
-            # 🎯 REMPLACEMENT DU "noe_01" EN DUR
             cursor = await db.execute(
                 "INSERT INTO historique_chat (timestamp, resume, userID) VALUES (datetime('now'), ?, ?)",
                 (resume, user_id) 
@@ -210,7 +249,6 @@ async def voice_endpoint(
 
     async def run_agent():
         try:
-            # 🎯 ON PASSE LE USER_ID À L'AGENT
             await agent_runner.process_chat(text_transcribed, real_session_id, user_id, stream_callback)
         except Exception as e:
             print(f"❌ Erreur Agent : {e}")
@@ -237,14 +275,14 @@ async def multimodal_endpoint(
     prompt: str = Form(...),
     image: UploadFile | None = File(None),
     session_id: str | None = Form(None),
-    user_id: str = Form(...) # 🎯 REQUIS !
+    user_id: str = Form(...) 
 ):
     real_session_id = int(session_id) if session_id and session_id not in ('null', 'undefined') else None
     
     if not real_session_id:
-         async with aiosqlite.connect("memory/memoire.db") as db:
+        db_path = await get_and_init_user_db(user_id)
+        async with aiosqlite.connect(db_path) as db:
             resume = "Analyse: " + prompt[:20] + "..."
-            # 🎯 REMPLACEMENT DU "noe_01" EN DUR
             cursor = await db.execute(
                 "INSERT INTO historique_chat (timestamp, resume, userID) VALUES (datetime('now'), ?, ?)",
                 (resume, user_id)
@@ -261,9 +299,17 @@ async def multimodal_endpoint(
             img_pil = Image.open(io.BytesIO(contents))
             img_pil.thumbnail((800, 800)) 
             filename = f"{uuid.uuid4()}.jpg"
-            filepath = f"memory/uploads/{filename}"
+            
+            # 🎯 DOSSIER D'UPLOAD ISOLÉ PAR UTILISATEUR
+            user_uploads_dir = f"memory/users/{user_id}/uploads"
+            os.makedirs(user_uploads_dir, exist_ok=True)
+            filepath = f"{user_uploads_dir}/{filename}"
+            
             img_pil.convert("RGB").save(filepath, "JPEG", quality=70)
-            image_path_db = f"/api/uploads/{filename}"
+            
+            # 🎯 CHEMIN D'ACCÈS POUR LE FRONTEND
+            image_path_db = f"/api/users/{user_id}/uploads/{filename}"
+            
         except Exception as e:
             print(f"❌ Erreur de sauvegarde image : {e}")
 
@@ -273,7 +319,6 @@ async def multimodal_endpoint(
 
     async def run_agent():
         try:
-            # 🎯 ON PASSE LE USER_ID À L'AGENT MULTIMODAL
             await agent_runner.process_multimodal_chat(prompt, image_b64, image_path_db, real_session_id, user_id, stream_callback)
         except Exception as e:
             print(f"❌ Erreur Agent Multimodal : {e}")
@@ -292,6 +337,9 @@ async def multimodal_endpoint(
     headers = {"x-session-id": str(real_session_id), "x-chosen-model": "qwen3-vl:8b"}
     return StreamingResponse(stream_generator(), media_type="text/plain", headers=headers)
 
+# ==========================================
+# 🎵 ROUTE TTS
+# ==========================================
 @app.get("/api/tts/{audio_id}")
 async def get_tts(audio_id:str):
     if audio_id not in memory.audio_store:

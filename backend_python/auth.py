@@ -43,26 +43,36 @@ def init_auth_db():
     conn.close()
 
 def setup_new_user_workspace(user_id: str):
-    """🪄 Crée l'arborescence complète et les fichiers par défaut."""
+    """🪄 Crée l'arborescence complète et les fichiers par défaut (USER, AGENTS, MEMORY)."""
     base_path = f"memory/users/{user_id}"
     system_path = f"{base_path}/system"
     
     os.makedirs(system_path, exist_ok=True)
     
+    # 1. USER.md (Profil)
     user_md_path = f"{system_path}/USER.md"
     if not os.path.exists(user_md_path):
         with open(user_md_path, "w", encoding="utf-8") as f:
             f.write(f"# Profil de l'utilisateur : {user_id}\n\n")
             f.write("Je suis un nouvel utilisateur sur le système. Apprends à me connaître au fil de nos conversations !\n")
             
+    # 2. AGENTS.md (Identité de l'IA)
     agents_md_path = f"{system_path}/AGENTS.md"
     if not os.path.exists(agents_md_path):
         with open(agents_md_path, "w", encoding="utf-8") as f:
             f.write("# Identité Système\n\n")
             f.write(f"Tu es Jean-Heude, l'assistant personnel IA de {user_id}. Sois franc, direct et efficace.\n")
-            
-    print(f"📁 Espace de travail initialisé avec succès pour : {user_id}")
 
+    # 3. ✨ NOUVEAU : MEMORY.md (Journal des faits extraits)
+    memory_md_path = f"{system_path}/MEMORY.md"
+    if not os.path.exists(memory_md_path):
+        with open(memory_md_path, "w", encoding="utf-8") as f:
+            f.write(f"# 🧠 Mémoire à long terme de {user_id}\n\n")
+            f.write("--- SOUVENIRS ET FAITS EXTRAITS ---\n")
+            f.write("(C'est ici que je stocke ce que je retiens de nos échanges importants)\n")
+            
+    print(f"📁 Espace de travail initialisé (USER, AGENTS, MEMORY) pour : {user_id}")
+    
 def create_global_account(user_id: str, password: str) -> bool:
     """Étape 1 : L'utilisateur crée son compte maître."""
     conn = sqlite3.connect(DB_PATH)

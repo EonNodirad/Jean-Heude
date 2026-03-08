@@ -1,33 +1,35 @@
-
+# --- CŒUR WEB & WEBSOCKET ---
 fastapi
-uvicorn
-python-dotenv
+uvicorn[standard]
+websockets
+python-multipart
 httpx
 
-
+# --- IA, MODÈLES & MÉMOIRE ---
 ollama
 mem0ai
-
-qdrant-client 
+qdrant-client
 aiosqlite
+neo4j
+tiktoken
+
+# --- OUTILS & MCP ---
 mcp
 PyYAML
+watchfiles
+Pillow
 
+# --- GATEWAYS (Réseaux Sociaux) ---
+python-telegram-bot
+discord.py
+PyNaCl
+
+# --- TÂCHES PLANIFIÉES ---
+apscheduler
+croniter
+
+# --- DÉVELOPPEMENT & TESTS ---
+python-dotenv
 ruff
 pytest
 pytest-asyncio
-
-
-tiktoken
-
-watchfiles
-
-Pillow
-
-python-telegram-bot
-discord.py
-
-neo4j
-apscheduler
-
-croniter
