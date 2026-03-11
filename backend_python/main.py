@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException, Depends, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from fastapi.responses import StreamingResponse
@@ -9,11 +9,11 @@ import httpx
 from gateway import Gateway
 from agent_runner import AgentRunner
 import memory_IA as memory
-import aiosqlite
 
 import asyncio
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
+from database.memory_manager import memory_manager
 from qdrant_client.http import models  
 from watchfiles import awatch
 import tools 
@@ -22,7 +22,16 @@ import io
 import uuid
 
 # ✅ IMPORT DE L'AUTHENTIFICATION
-from auth import init_auth_db, create_global_account, verify_password
+from auth import init_auth_db, create_global_account, verify_password, create_access_token, decode_access_token
+
+async def get_current_user_dt(authorization: str = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Token manquant ou invalide")
+    token = authorization.split(" ")[1]
+    payload = decode_access_token(token)
+    if not payload or "user_id" not in payload:
+        raise HTTPException(status_code=401, detail="Token expiré ou invalide")
+    return payload["user_id"]
 
 load_dotenv()
 STT_SERVER_URL = os.getenv("STT_SERVER_URL", "")
@@ -47,33 +56,36 @@ async def lifespan(app: FastAPI):
     # ✅ Initialisation de la base d'authentification
     init_auth_db()
     
-    async with aiosqlite.connect("memory/memoire.db") as db:
-        await db.execute("CREATE TABLE IF NOT EXISTS memory_chat (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT, timestamp TIMESTAMP, sessionID INTEGER)")
-        await db.execute("CREATE TABLE IF NOT EXISTS historique_chat (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TIMESTAMP, resume TEXT, userID TEXT)")
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS long_term_index (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chunk_text TEXT,
-                vector_id TEXT
-            )""")
-        await db.commit()
+    await memory_manager.sqlite.init_db()
 
+    # --- NOUVEAU: Check Rapide Ollama ---
+    ollama_online = False
     try:
-        await memory.client_qdrant.get_collection("jean_heude_memories")
-    except Exception:
-        print("📦 Création de la collection Qdrant 'jean_heude_memories'...")
-        await memory.client_qdrant.create_collection(
-            collection_name="jean_heude_memories",
-            vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE),
-        )
+        async with httpx.AsyncClient(timeout=2.0) as http_client:
+            res = await http_client.get(memory.remote_host)
+            if res.status_code == 200:
+                ollama_online = True
+                print("✅ [Ollama] Serveur détecté en ligne.")
+            else:
+                print(f"⚠️ [Ollama] Statut inattendu: {res.status_code}")
+    except Exception as e:
+        print(f"⚠️ [Ollama] Injoignable au démarrage (L'IA sera désactivée). Erreur: {e}")
 
-    users_dir = "memory/users"
-    if os.path.exists(users_dir):
-        for user_folder in os.listdir(users_dir):
-            if os.path.isdir(os.path.join(users_dir, user_folder)):
-                print(f"🔄 Synchro de la mémoire pour l'utilisateur : {user_folder}...")
-                await memory.sync_memory_md(user_folder)
-    await tools.sync_skills_to_qdrant()
+    if ollama_online:
+        try:
+            await memory_manager.qdrant.init_collection("jean_heude_memories")
+        except Exception as e:
+            print(f"⚠️ Impossible d'initialiser Qdrant (Serveur hors ligne ?) : {e}")
+
+        users_dir = "memory/users"
+        if os.path.exists(users_dir):
+            for user_folder in os.listdir(users_dir):
+                if os.path.isdir(os.path.join(users_dir, user_folder)):
+                    print(f"🔄 Synchro de la mémoire pour l'utilisateur : {user_folder}...")
+                    await memory.sync_memory_md(user_folder)
+        await tools.sync_skills_to_qdrant()
+    else:
+        print("⏭️ [Startup] Synchronisation mémoires et skills ignorée car Ollama est absent.")
     
     print("✅ Jean-Heude est prêt !")
     asyncio.create_task(memory.cleanup_audio_store())
@@ -110,14 +122,16 @@ class AuthRequest(BaseModel):
 async def register_user(req: AuthRequest):
     success = create_global_account(req.user_id, req.password)
     if success:
-        return {"status": "success", "message": "Compte créé."}
+        token = create_access_token({"user_id": req.user_id})
+        return {"status": "success", "message": "Compte créé.", "access_token": token, "user_id": req.user_id}
     else:
         raise HTTPException(status_code=400, detail="Ce pseudo est déjà pris.")
 
 @app.post("/api/login")
 async def login_user(req: AuthRequest):
     if verify_password(req.user_id, req.password):
-        return {"status": "success", "user_id": req.user_id}
+        token = create_access_token({"user_id": req.user_id})
+        return {"status": "success", "user_id": req.user_id, "access_token": token}
     else:
         raise HTTPException(status_code=401, detail="Identifiants incorrects.")
 
@@ -125,7 +139,15 @@ async def login_user(req: AuthRequest):
 # 🔌 WEBSOCKET
 # ==========================================
 @app.websocket("/ws/{client_id}")
-async def websocket_endpoint(websocket: WebSocket, client_id: str):
+async def websocket_endpoint(websocket: WebSocket, client_id: str, token: str = Query(None)):
+    if not token:
+        await websocket.close(code=1008)
+        return
+    payload = decode_access_token(token)
+    if not payload or payload.get("user_id") != client_id:
+        await websocket.close(code=1008)
+        return
+
     await gateway.connect(websocket, client_id)
     try:
         while True:
@@ -144,26 +166,14 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
 # 🗃️ ROUTES HISTORIQUE (Sécurisées Multi-Tenant)
 # ==========================================
 @app.get("/history")
-async def get_historique_list(user_id: str):
+async def get_historique_list(user_id: str = Depends(get_current_user_dt)):
     """Récupère l'historique UNIQUEMENT pour l'utilisateur connecté"""
-    async with aiosqlite.connect("memory/memoire.db") as db:
-        db.row_factory = aiosqlite.Row
-        # 🛡️ SÉCURITÉ : WHERE userID = ?
-        async with db.execute("SELECT id, resume, timestamp FROM historique_chat WHERE userID = ? ORDER BY timestamp DESC", (user_id,)) as cursor:
-            lignes = await cursor.fetchall()
-            return [{"id": ligne["id"], "resume": ligne["resume"], "timestamp": ligne["timestamp"]} for ligne in lignes]
+    return await memory_manager.sqlite.get_history_list(user_id)
 
 @app.get("/history/{session_id}")
-async def get_history(session_id: int):
+async def get_history(session_id: int, user_id: str = Depends(get_current_user_dt)):
     # Note: On pourrait ajouter une vérification pour s'assurer que la session appartient bien au user_id
-    async with aiosqlite.connect("memory/memoire.db") as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT role, content, image FROM memory_chat WHERE sessionID = ? ORDER BY timestamp ASC",
-            (session_id,)
-        )
-        lignes = await cursor.fetchall()
-        return [{"role": ligne["role"], "content": ligne["content"], "image": ligne["image"]} for ligne in lignes]
+    return await memory_manager.sqlite.get_history(session_id)
 
 # ==========================================
 # 🎤 ROUTE STT
@@ -172,7 +182,7 @@ async def get_history(session_id: int):
 async def voice_endpoint(
     file: UploadFile = File(...), 
     session_id: str | None = Form(None),
-    user_id: str = Form(...) # 🎯 REQUIS !
+    user_id: str = Depends(get_current_user_dt) # 🎯 REQUIS !
 ):
     audio_binary = await file.read()
     text_transcribed = ""
@@ -191,15 +201,8 @@ async def voice_endpoint(
         return {"error": "Aucune parole détectée"}
 
     if session_id is None or session_id == 'null' or session_id == 'undefined':
-        async with aiosqlite.connect("memory/memoire.db") as db:
-            resume = text_transcribed[:30] + "..."
-            # 🎯 REMPLACEMENT DU "noe_01" EN DUR
-            cursor = await db.execute(
-                "INSERT INTO historique_chat (timestamp, resume, userID) VALUES (datetime('now'), ?, ?)",
-                (resume, user_id) 
-            )
-            await db.commit()
-            real_session_id = cursor.lastrowid
+        resume = text_transcribed[:30] + "..."
+        real_session_id = await memory_manager.create_session(user_id, resume)
     else:
         real_session_id = int(session_id)
 
@@ -237,20 +240,13 @@ async def multimodal_endpoint(
     prompt: str = Form(...),
     image: UploadFile | None = File(None),
     session_id: str | None = Form(None),
-    user_id: str = Form(...) # 🎯 REQUIS !
+    user_id: str = Depends(get_current_user_dt) # 🎯 REQUIS !
 ):
     real_session_id = int(session_id) if session_id and session_id not in ('null', 'undefined') else None
     
     if not real_session_id:
-         async with aiosqlite.connect("memory/memoire.db") as db:
-            resume = "Analyse: " + prompt[:20] + "..."
-            # 🎯 REMPLACEMENT DU "noe_01" EN DUR
-            cursor = await db.execute(
-                "INSERT INTO historique_chat (timestamp, resume, userID) VALUES (datetime('now'), ?, ?)",
-                (resume, user_id)
-            )
-            await db.commit()
-            real_session_id = cursor.lastrowid
+         resume = "Analyse: " + prompt[:20] + "..."
+         real_session_id = await memory_manager.create_session(user_id, resume)
 
     image_b64 = None
     image_path_db = None

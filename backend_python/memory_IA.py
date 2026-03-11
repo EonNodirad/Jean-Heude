@@ -13,6 +13,9 @@ from ollama import AsyncClient
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models
 
+from database.file_repo import FileRepo
+from database.memory_manager import memory_manager
+
 # --- Configurations Initiales ---
 load_dotenv()
 
@@ -29,46 +32,38 @@ model = "phi3:mini"
 audio_store = {}
 memory_lock = asyncio.Lock()
 
-# Client Qdrant
-client_qdrant = AsyncQdrantClient(host=url_qdrant, port=6333)
-
 # 👤 AJOUT DU user_id
 async def sync_memory_md(user_id: str):
     """Synchronise la mémoire spécifique de l'utilisateur."""
-    # ✅ CHEMINS DYNAMIQUES
-    user_dir = f"memory/users/{user_id}"
-    file_path = f"{user_dir}/system/MEMORY.md"
-    db_path = f"{user_dir}/memoire.db"
-    
-    if not os.path.exists(file_path):
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(f"# Mémoire Long Terme de {user_id}\n\n")
-            f.write("- Je viens de me réveiller. Ma mémoire est encore vierge.\n")
+    is_new = FileRepo.init_memory_md(user_id)
+    if is_new:
         return
 
-    with open(file_path, "r", encoding="utf-8") as f:
-        lines = f.readlines()
+    lines = FileRepo.read_memory_md(user_id)
 
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("DELETE FROM long_term_index")
+    await memory_manager.sqlite.init_db()
+    await memory_manager.sqlite.clear_long_term_index()
+    
+    for line in lines:
+        content = line.strip("- \n")
+        if len(content) < 5: 
+            continue
+
+        vector = await tools._get_tool_embedding(content)
+        if not vector:
+            continue
+
+        v_id = str(uuid.uuid4())
         
-        for line in lines:
-            content = line.strip("- \n")
-            if len(content) < 5: 
-                continue
+        await memory_manager.qdrant.upsert_memory(
+            collection_name="jean_heude_memories",
+            v_id=v_id,
+            vector=vector,
+            content=content,
+            user_id=user_id
+        )
 
-            vector = await tools._get_tool_embedding(content)
-            v_id = str(uuid.uuid4())
-            
-            # 🛡️ AJOUT DU PAYLOAD user_id
-            await client_qdrant.upsert(
-                collection_name="jean_heude_memories",
-                points=[models.PointStruct(id=v_id, vector=vector, payload={"text": content, "user_id": user_id})]
-            )
-
-            await db.execute("INSERT INTO long_term_index (chunk_text, vector_id) VALUES (?, ?)", (content, v_id))
-        await db.commit()
+        await memory_manager.sqlite.add_long_term_index(content, v_id)
 
 
 async def cleanup_audio_store():
@@ -148,85 +143,34 @@ async def pre_generate_audio(audio_id, text):
             audio_store[audio_id]["event"].set()
 
 
-# ----------------- RECHERCHE HYBRIDE -----------------
+# ----------------- Helper Functions supprimées (Déléguées à MemoryManager) ----------
 
 async def chat_with_memories(history: list, chosen_model: str, user_id: str = "default_user") -> AsyncGenerator[str,Any]:
     
-    async with memory_lock:
-        last_user_message = next((m['content'] for m in reversed(history) if m['role'] == 'user'), "")
-        print(f"🔍 Recherche mémoire hybride pour : {last_user_message}")
-        
-        memories_list = []
-        
-        # 1. Recherche par SENS (Qdrant)
-        # 1. Recherche par SENS (Qdrant)
-        try:
-            vector = await tools._get_tool_embedding(last_user_message)
-            v_results = await client_qdrant.query_points(
-                collection_name="jean_heude_memories",
-                query=vector,
-                limit=5,
-                query_filter=models.Filter(
-                    must=[models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id))]
-                )
-            )
-            for hit in v_results.points:
-                # Extraction propre (Type-Safe pour Pyright)
-                payload = getattr(hit, "payload", None)
-                text = None
-                
-                if isinstance(payload, dict):
-                    text = payload.get("text")
-                elif isinstance(hit, dict):
-                    payload_dict = hit.get("payload")
-                    if isinstance(payload_dict, dict):
-                        text = payload_dict.get("text")
-                        
-                if isinstance(text, str) and text.strip():
-                    memories_list.append(text.strip())
-                    
-        except Exception as e:
-            print(f"⚠️ Erreur Qdrant : {e}")
+    last_user_message = next((m['content'] for m in reversed(history) if m['role'] == 'user'), "")
+    print(f"🔍 Recherche mémoire hybride et outils pour : {last_user_message}")
 
-        # 2. Recherche par MOTS-CLÉS (SQLite)
-        keywords = last_user_message.split()
-        if keywords:
-            sql_query = "SELECT chunk_text FROM long_term_index WHERE " + " OR ".join(["chunk_text LIKE ?"] * len(keywords))
-            params = [f"%{k}%" for k in keywords]
-            # ✅ CHEMIN DYNAMIQUE
-            async with aiosqlite.connect(f"memory/users/{user_id}/memoire.db") as db:
-                async with db.execute(sql_query, params) as cursor:
-                    k_results = await cursor.fetchall()
-                    for row in k_results:
-                        if row[0] not in memories_list:
-                            memories_list.append(row[0])
+    # On lance SEULEMENT la sélection d'outils, le contexte est déjà dans l'history (préparé par agent_runner)
+    tools_task = tools.get_relevant_tools(last_user_message, limit=20)
+    available_tools = await tools_task
 
-        memories_str = "\n".join([f"- {m}" for m in memories_list])
-        print("✅ Fin de la recherche mémoire")
+    print("✅ Fin de la recherche mémoire")
 
-    bloc_souvenirs = (
-        "--- SOUVENIRS CONCERNANT L'UTILISATEUR (MÉMOIRE LONG TERME) ---\n"
-        f"{memories_str if memories_str else 'Aucun souvenir spécifique.'}\n"
-    )
-
-    # 2. On fusionne avec le contexte venant de AgentRunner
-    messages = []
+    # 2. Le contexte venant de AgentRunner est déjà prêt
+    messages = history
     system_merged = False
     
     for msg in history:
         if msg["role"] == "system" and not system_merged:
-            nouveau_contenu = msg["content"] + "\n\n" + bloc_souvenirs + "\nTu es Jean-Heude, un assistant personnel franc et objectif. Réponds de manière claire et naturelle."
-            messages.append({"role": "system", "content": nouveau_contenu})
+            nouveau_contenu = msg["content"] + "\nTu es Jean-Heude, un assistant personnel franc et objectif. Réponds de manière claire et naturelle."
+            msg["content"] = nouveau_contenu
             system_merged = True
-        else:
-            messages.append(msg)
             
     if not system_merged:
-        messages.insert(0, {"role": "system", "content": f"Tu es Jean-Heude.\n{bloc_souvenirs}"})
+        messages.insert(0, {"role": "system", "content": f"Tu es Jean-Heude."})
 
     assistant_final_text = ""
-    
-    available_tools = await tools.get_relevant_tools(last_user_message, limit=20)
+
 
     async for chunk in execute_agent_loop(messages, chosen_model, available_tools, user_id=user_id):
         if not chunk.startswith("¶") and not chunk.startswith("||AUDIO_ID:"):

@@ -4,6 +4,7 @@ import { audioQueue } from '$lib/TTS.svelte';
 export function createRecorder(callbacks: {
     getSessionId: () => number | null;
     getUserId: () => string; // 🎯 NOUVEAU : On demande l'ID de l'utilisateur
+    getToken: () => string; // 🎯 NOUVEAU : Token pour auth
     onStream: (think: string, content: string, status: string) => void;
     onTranscriptionStart: () => void;
     onEnd: () => void;
@@ -49,6 +50,7 @@ export function createRecorder(callbacks: {
         
         // 🎯 L'AJOUT CRUCIAL POUR FASTAPI :
         const userId = callbacks.getUserId();
+        const token = callbacks.getToken();
         if (userId) {
             formData.append('user_id', userId);
         } else {
@@ -64,7 +66,11 @@ export function createRecorder(callbacks: {
         
         try {
             // Si ton proxy SvelteKit redirige vers le backend Python
-            const response = await fetch('/api/stt', { method: 'POST', body: formData });
+            const response = await fetch('/api/stt', { 
+                method: 'POST', 
+                headers: { 'Authorization': `Bearer ${token}` },
+                body: formData 
+            });
 
             const sessionId = response.headers.get('x-session-id');
             const model = response.headers.get('x-chosen-model');

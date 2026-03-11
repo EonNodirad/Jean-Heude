@@ -103,8 +103,12 @@ async def get_mcp_tools() -> list:
 
 async def _get_tool_embedding(text: str):
     """Génère un vecteur pour la description de l'outil."""
-    response = await ollama_client.embeddings(model="nomic-embed-text", prompt=text)
-    return response["embedding"]
+    try:
+        response = await ollama_client.embeddings(model="nomic-embed-text", prompt=text)
+        return response["embedding"]
+    except Exception as e:
+        print(f"⚠️ [Ollama] Impossible de générer l'embedding (Serveur hors ligne ?): {e}")
+        return None
 
 async def sync_skills_to_qdrant():
     """Indexe TOUS les outils (Skills Python + Serveurs MCP) dans Qdrant au démarrage."""
@@ -144,6 +148,10 @@ async def sync_skills_to_qdrant():
             
             text_to_embed = f"{manifest.get('name')} : {manifest.get('description')}"
             vector = await _get_tool_embedding(text_to_embed)
+            if not vector:
+                print(f"⚠️ Impossible d'indexer le skill local '{skill_folder}' car les embeddings sont indisponibles.")
+                continue
+
             stable_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, skill_folder))
             
             points.append(models.PointStruct(
@@ -159,6 +167,10 @@ async def sync_skills_to_qdrant():
         manifest = outil["function"]
         text_to_embed = f"{manifest.get('name')} : {manifest.get('description')}"
         vector = await _get_tool_embedding(text_to_embed)
+        if not vector:
+            print(f"⚠️ Impossible d'indexer l'outil MCP '{manifest.get('name')}' car les embeddings sont indisponibles.")
+            continue
+            
         # On crée un ID unique basé sur le nom préfixé de l'outil MCP
         stable_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, manifest.get('name')))
         
@@ -178,6 +190,9 @@ async def get_relevant_tools(query: str, limit: int = 5, threshold: float = 0.5)
     tools_list = []
     try:
         query_vector = await _get_tool_embedding(query)
+        if not query_vector:
+            print("⚠️ Impossible de chercher des outils pertinents : Embeddings indisponibles.")
+            return tools_list
         
         # On demande à Qdrant de trouver les meilleurs outils, peu importe leur source !
         results = await qdrant.query_points(

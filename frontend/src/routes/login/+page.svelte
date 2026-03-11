@@ -1,5 +1,5 @@
 <script>
-    import { currentUser } from '$lib/stores';
+    import { currentUser, authToken } from '$lib/stores';
     import { goto } from '$app/navigation';
     import { env } from '$env/dynamic/public';
 
@@ -20,7 +20,9 @@
             });
 
             if (res.ok) {
-                $currentUser = pseudo; // Met à jour le store
+                const data = await res.json();
+                $currentUser = data.user_id; // Met à jour le store
+                $authToken = data.access_token;
                 goto('/'); // Redirige vers le chat
             } else {
                 const data = await res.json();
@@ -41,8 +43,10 @@
             });
 
             if (res.ok) {
+                const data = await res.json();
                 // Si le compte est créé, on le connecte direct
-                $currentUser = pseudo;
+                $currentUser = data.user_id;
+                $authToken = data.access_token;
                 goto('/');
             } else {
                 const data = await res.json();

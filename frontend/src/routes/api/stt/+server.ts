@@ -10,6 +10,7 @@ export const POST: RequestHandler = async ({ request, fetch }) => {
 		// Note : On utilise l'URL localhost:8000
 		const response = await fetch(`${env.PUBLIC_URL_SERVEUR_PYTHON}/stt`, {
 			method: 'POST',
+			headers: { 'Authorization': request.headers.get('Authorization') || '' },
 			body: formData
 		});
 

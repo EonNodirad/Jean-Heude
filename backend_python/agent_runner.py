@@ -1,31 +1,23 @@
-# agent_runner.py
-import aiosqlite
 import memory_IA as memory
 import re
 import os
 import tools
 import datetime
 import tiktoken
+import asyncio
 from ollama import AsyncClient
 from functools import wraps
-import graph_memory
-from qdrant_client.http import models
-from typing import Any
+from database.file_repo import FileRepo
+from database.memory_manager import memory_manager
 
 def session_guard(func):
     """Garantit que chaque agent dispose d'un espace de travail isolé."""
     @wraps(func)
-    async def wrapper(self, text_content: str, session_id: int | None, on_token_callback, **kwargs):
+    async def wrapper(self, *args, **kwargs):
+        session_id = args[1] if len(args) > 1 else kwargs.get('session_id')
         print(f"🛡️ [Session Guard] Isolation de la session {session_id or 'Nouvelle'}")
-        return await func(self, text_content, session_id, on_token_callback, **kwargs)
+        return await func(self, *args, **kwargs)
     return wrapper
-
-def get_user_dir(user_id: str) -> str:
-    """Crée et retourne le chemin d'accès au dossier unique de l'utilisateur."""
-    # On crée une arborescence propre : memory/users/noe_01/system/
-    base_path = f"memory/users/{user_id}"
-    os.makedirs(f"{base_path}/system", exist_ok=True)
-    return base_path
 class AgentRunner:
     def __init__(self):
         self.encoder = tiktoken.get_encoding("cl100k_base")
@@ -36,27 +28,7 @@ class AgentRunner:
         self.admin_model = "llama3.1:8b" 
         
     def _load_os_context(self, user_id: str) -> str:
-        contexte = ""
-        user_dir = get_user_dir(user_id)
-        
-        # Le fichier AGENTS.md propre à l'utilisateur
-        path_agents = f"{user_dir}/system/AGENTS.md"
-        if os.path.exists(path_agents):
-            with open(path_agents, "r", encoding="utf-8") as f:
-                contexte += f.read() + "\n\n"
-                
-        # Le fichier USER.md propre à l'utilisateur
-        path_user = f"{user_dir}/system/USER.md"
-        if os.path.exists(path_user):
-            with open(path_user, "r", encoding="utf-8") as f:
-                contexte += f"--- PROFIL DE L'UTILISATEUR ACTUEL ({user_id}) ---\n"
-                contexte += f.read() + "\n\n"
-        
-        if not contexte.strip():
-            contexte = "Tu es J.E.A.N-H.E.U.D.E, un assistant local souverain."
-            
-        return contexte
-        return contexte
+        return FileRepo.load_os_context(user_id)
     def count_tokens(self, messages: list) -> int:
         """Compte les jetons d'un historique complet."""
         text = " ".join([str(m["content"]) for m in messages])
@@ -93,19 +65,13 @@ class AgentRunner:
         
         if "aucun" not in facts.lower() and len(facts) > 5:
             # ✅ CORRECTION : Écriture dans le BON dossier utilisateur
-            user_dir = get_user_dir(user_id)
-            with open(f"{user_dir}/system/MEMORY.md", "a", encoding="utf-8") as f:
-                f.write(f"\n{facts}\n")
+            FileRepo.append_fact_to_memory(user_id, facts)
             
             # ⚠️ ATTENTION : sync_memory_md doit aussi être adapté (on le fera après dans memory.py)
             await memory.sync_memory_md(user_id)
             
-            # 2. NOUVEAU : Sauvegarde Graphe !
-            donnees_graphe = await graph_memory.extract_ontology(facts)
-            # ⚠️ ATTENTION : insert_graph_data doit aussi être adapté pour isoler le graphe par utilisateur (on y reviendra)
-            await graph_memory.graph_db.insert_graph_data(donnees_graphe,user_id)
-            
-            print("✅ [Context Guard] Faits persistés dans MEMORY.md et indexés dans le Graphe.")
+            # 2. NOUVEAU : Sauvegarde Globalisée via MemoryManager !
+            await memory_manager.process_new_facts(user_id, facts)
 
         # 2. Algorithme de compaction (pour le prompt LLM uniquement)
         print("📉 [Context Guard] Création du résumé pour le prompt...")
@@ -124,25 +90,20 @@ class AgentRunner:
 
     async def process_multimodal_chat(self, prompt: str, image_b64: str | None, image_path: str|None, session_id: int | None, user_id: str, stream_callback):
         print(f"⚙️ AgentRunner: Traitement multimodal pour session {session_id}")
-        user_db_path = f"{get_user_dir(user_id)}/memoire.db"
-        # 1. On charge l'historique directement depuis SQLite
+        # 1. On charge l'historique directement depuis MemoryManager
         memory_context = []
         if session_id:
-            async with aiosqlite.connect(user_db_path) as db:
-                async with db.execute("SELECT role, content FROM memory_chat WHERE sessionID = ? ORDER BY timestamp ASC LIMIT 20", (session_id,)) as cursor:
-                    lignes = await cursor.fetchall()
-                    for ligne in lignes:
-                        memory_context.append({"role": ligne[0], "content": ligne[1]})
+            memory_context = await memory_manager.get_recent_history(session_id, 20)
         
         # 2. Le System Prompt spécifique à la vision
         os_context = self._load_os_context(user_id)
-        graph_context = await graph_memory.graph_db.search_graph(prompt, user_id)
+        hybrid_context = await memory_manager.get_hybrid_context(user_id, prompt)
         
         system_prompt = {
             "role": "system",
             "content": (
                 f"{os_context}\n\n"
-                f"{graph_context}\n\n"
+                f"{hybrid_context}\n\n"
                 "--- INSTRUCTION SPÉCIALE MULTIMODALE ---\n"
                 "Tu as des yeux. Analyse l'image fournie avec une précision d'expert technique."
             )
@@ -173,114 +134,58 @@ class AgentRunner:
         
         # 6. Sauvegarde BDD (Utilisateur ET Assistant)
         if session_id:
-            async with aiosqlite.connect("memory/memoire.db") as db:
-                
-                # Astuce magique : On ajoute la colonne 'image' dans la table si elle n'existe pas !
-                try:
-                    await db.execute("ALTER TABLE memory_chat ADD COLUMN image TEXT")
-                except Exception:
-                    pass # Si ça fait une erreur, c'est que la colonne existe déjà, on ignore.
-                
-                # NOUVEAU : On insère le prompt AVEC le chemin de l'image (image_path)
-                await db.execute(
-                    "INSERT INTO memory_chat (role, content, timestamp, sessionID, image) VALUES (?, ?, datetime('now'), ?, ?)",
-                    ("user", prompt, session_id, image_path)
-                )
-                
-                if assistant_final_text.strip():
-                    # L'assistant n'a pas d'image, donc on met None à la fin
-                    await db.execute(
-                        "INSERT INTO memory_chat (role, content, timestamp, sessionID, image) VALUES (?, ?, datetime('now'), ?, ?)",
-                        ("assistant", assistant_final_text.strip(), session_id, None)
-                    )
-                await db.commit()
-
-    async def _recall_web_knowledge(self, query: str) -> str:
-        """Fouille dans la collection de savoir accumulé sur le web (Base Commune)."""
-        try:
-            query_vector = await tools._get_tool_embedding(query)
+            await memory_manager.save_message(user_id, session_id, "user", prompt, image_path)
             
-            results = await tools.qdrant.query_points(
-                collection_name="jean_heude_knowledge",
-                query=query_vector,
-                limit=5,
-                score_threshold=0.7
-                # ❌ ON A RETIRÉ LE FILTRE : Il fouille dans les recherches de tout le monde !
-            )
-            
-            if not results.points:
-                return ""
+            if assistant_final_text.strip():
+                await memory_manager.save_message(user_id, session_id, "assistant", assistant_final_text.strip())
 
-            extracted = []
-            for hit in results.points:
-
-                payload = getattr(hit, "payload", None)
-                
-                if isinstance(payload, dict):
-                    content = payload.get("contenu", "")
-                    date = payload.get("date", "Date inconnue")
-                    extracted.append(f"[Souvenir du {date}]: {content}")
-                
-            return "\n".join(extracted)
-        except Exception as e:
-            print(f"⚠️ Erreur rappel connaissance web: {e}")
-            return ""
+    # _recall_web_knowledge a été déplacé dans memory_manager.py
         
     @session_guard
     async def process_chat(self, text_content: str, session_id: int | None, user_id: str, on_token_callback, is_hidden: bool = False):
-        user_db_path = f"{get_user_dir(user_id)}/memoire.db"
-        async with aiosqlite.connect(user_db_path) as db:
-            # 1. Gestion Session
-            if session_id is None:
-                resume = text_content[:30] + "..."
-                cursor = await db.execute(
-                    # 👤 NOUVEAU : On utilise la vraie variable user_id au lieu de "noe_01"
-                    "INSERT INTO historique_chat (timestamp, resume, userID) VALUES (datetime('now'), ?, ?)",
-                    (resume, user_id)
-                )
-                await db.commit()
-                session_id = cursor.lastrowid
-                print(f"🆕 Nouvelle session créée : ID {session_id} pour {user_id}")
+        # 1. Gestion Session
+        if session_id is None:
+            resume = text_content[:30] + "..."
+            session_id = await memory_manager.create_session(user_id, resume)
+            print(f"🆕 Nouvelle session créée : ID {session_id} pour {user_id}")
 
-            # ... (Sauvegarde INTACTE du message) ...
+        # 2. Sauvegarde du message utilisateur
+        await memory_manager.save_message(user_id, session_id, "user", text_content)
+        
+        # 3. Préparation du contexte (Optimisation RAM/Parallel)
+        os_context = self._load_os_context(user_id)
+        
+        # Lancement parallèle des recherches de contexte
+        web_context_task = memory_manager.get_web_knowledge_context(text_content)
+        hybrid_context_task = memory_manager.get_hybrid_context(user_id, text_content)
+        
+        web_context, hybrid_context = await asyncio.gather(web_context_task, hybrid_context_task)
+        
+        date_actuelle = datetime.datetime.now().strftime("%A %d %B %Y à %H:%M:%S")
+        
+        # Construction du super-prompt système
+        system_content = (
+            f"{os_context}\n\n"
+        )
+        
+        if hybrid_context:
+            system_content += f"{hybrid_context}\n\n"
             
-            # 3. Préparation du contexte
-            # 👤 NOUVEAU : On passe le user_id pour charger le bon fichier
-            os_context = self._load_os_context(user_id)
-            graph_context = await graph_memory.graph_db.search_graph(text_content,user_id)
-            
-            # --- NOUVEAU : Récupération du savoir Web (Auto-Cache Qdrant) ---
-            web_context = await self._recall_web_knowledge(text_content)
-            
-            # --- NOUVEAU : Date dynamique pour éviter le bug "2023" ---
-            date_actuelle = datetime.datetime.now().strftime("%A %d %B %Y à %H:%M:%S")
-            
-            # Construction du super-prompt système
-            system_content = (
-                f"{os_context}\n\n"
-                f"--- CONTEXTE RELATIONNEL (GRAPHE) ---\n{graph_context}\n\n"
-            )
-            
-            if web_context:
-                system_content += f"--- SAVOIR RÉCENT (WEB CACHE) ---\n{web_context}\n\n"
-            
-            system_content += (
-                f"=== HORLOGE SYSTÈME ACTIVE ===\n"
-                f"Date et Heure actuelles : {date_actuelle}\n"
-                f"RÈGLE ABSOLUE : Tu AS accès à l'heure via ce prompt."
-            )
+        if web_context:
+            system_content += f"{web_context}\n\n"
+        
+        system_content += (
+            f"=== HORLOGE SYSTÈME ACTIVE ===\n"
+            f"Date et Heure actuelles : {date_actuelle}\n"
+            f"RÈGLE ABSOLUE : Tu AS accès à l'heure via ce prompt."
+        )
 
-            # Récupération de l'historique de conversation (les 20 derniers messages)
-            cursor = await db.execute( 
-                "SELECT role, content FROM memory_chat WHERE sessionID = ? ORDER BY timestamp DESC LIMIT 20",
-                (session_id,)
-            )
-            lignes = await cursor.fetchall()
-            
-            # Assemblage final des messages
-            contexte_message = [{"role": "system", "content": system_content}]
-            
-            contexte_message.extend([{"role": m[0], "content": m[1]} for m in reversed(list(lignes))])
+        # Récupération de l'historique de conversation (les 20 derniers messages)
+        messages_db = await memory_manager.get_recent_history(session_id, 20)
+        
+        # Assemblage final des messages
+        contexte_message = [{"role": "system", "content": system_content}]
+        contexte_message.extend(messages_db)
         # --- 4. DÉCLENCHEMENT DU CONTEXT GUARD (Compaction si nécessaire) ---
         current_tokens = self.count_tokens(contexte_message)
         if current_tokens > self.max_tokens:
@@ -303,13 +208,8 @@ class AgentRunner:
         
         # 6. Sauvegarde de la réponse dans la DB (pour l'UI)
         if assistant_final_text.strip():
-            async with aiosqlite.connect(user_db_path) as db_final:
-                await db_final.execute(
-                    "INSERT INTO memory_chat (role, content, timestamp, sessionID) VALUES (?, ?, datetime('now'), ?)",
-                    ("assistant", assistant_final_text.strip(), session_id)
-                )
-                await db_final.commit()
-                print("✅ Réponse assistant sauvegardée.")
+            await memory_manager.save_message(user_id, session_id, "assistant", assistant_final_text.strip())
+            print("✅ Réponse assistant sauvegardée.")
 
         return {"session_id": session_id, "model": chosen_model}
     

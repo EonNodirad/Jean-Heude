@@ -31,3 +31,5 @@ neo4j
 apscheduler
 
 croniter
+PyJWT
+websockets

@@ -1,4 +1,6 @@
 import { env } from '$env/dynamic/public';
+import { get } from 'svelte/store';
+import { authToken } from '$lib/stores';
 
 export const chatState = $state({
     isConnected: false,
@@ -28,7 +30,8 @@ export function connectGateway(clientId: string) {
     console.log('👉 URL finale générée :', wsUrl);
     
     // Le WebSocket se connecte avec l'ID dans l'URL (ex: ws://localhost:8000/ws/noe_01)
-    ws = new WebSocket(`${wsUrl}/ws/${clientId}`);
+    const token = get(authToken);
+    ws = new WebSocket(`${wsUrl}/ws/${clientId}?token=${token}`);
 
     ws.onopen = () => {
         console.log(`✅ Connecté à la Gateway Jean-Heude en tant que : ${clientId}`);
