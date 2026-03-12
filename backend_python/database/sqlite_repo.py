@@ -29,6 +29,14 @@ class SQLiteRepo:
                 lignes = await cursor.fetchall()
                 return [{"id": ligne["id"], "resume": ligne["resume"], "timestamp": ligne["timestamp"]} for ligne in lignes]
 
+    async def check_session_owner(self, session_id: int, user_id: str) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT 1 FROM historique_chat WHERE id = ? AND userID = ?",
+                (session_id, user_id)
+            ) as cursor:
+                return await cursor.fetchone() is not None
+
     async def get_history(self, session_id: int):
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row

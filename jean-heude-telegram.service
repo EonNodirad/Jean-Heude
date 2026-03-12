@@ -1,0 +1,35 @@
+# Jean-Heude — Service systemd : Gateway Telegram (production)
+#
+# Installation :
+#   1. Remplir les 3 champs marqués <...> ci-dessous
+#   2. sudo cp jean-heude-telegram.service /etc/systemd/system/
+#   3. sudo systemctl daemon-reload
+#   4. sudo systemctl enable jean-heude-telegram
+#   5. sudo systemctl start jean-heude-telegram
+#
+# Logs :
+#   journalctl -u jean-heude-telegram -f
+
+[Unit]
+Description=Jean-Heude Gateway Telegram
+After=network.target jean-heude-backend.service
+Wants=jean-heude-backend.service
+
+[Service]
+Type=simple
+
+# --- Remplir ces 3 champs ---
+User=<TON_USER>
+WorkingDirectory=<CHEMIN_ABSOLU>/backend_python
+EnvironmentFile=<CHEMIN_ABSOLU>/backend_python/.env
+# ----------------------------
+
+ExecStart=<CHEMIN_ABSOLU>/backend_python/.venv/bin/python telegram_gateway.py
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

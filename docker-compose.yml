@@ -8,35 +8,9 @@ services:
     volumes:
       - ./qdrant_storage:/qdrant/storage
 
-  backend:
-    build: ./backend_python
-    restart: always
-    env_file:
-      - ./backend_python/.env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./backend_python/memory:/app/memory
-      - ./backend_python/mcp_servers.yaml:/app/mcp_servers.yaml
-      
-      # 🚀 VOLUME UNIQUE POUR TOUS LES MCP
-      - ./backend_python/mcp_servers_prive:/app/mcp_servers_prive
-      
-      # 🛡️ Protection pour garder les node_modules du Docker (Linux) 
-      # même si tu modifies le code sur ton PC (Windows/Linux)
-      - /app/mcp_servers_prive/meteo_mcp/node_modules
-      - /app/mcp_servers_prive/puppeteer_mcp/node_modules
-      - /app/mcp_servers_prive/world_monitor_mcp/node_modules
-      
-      # Optionnel : monter tout le code pour le hot-reload total
-      - ./backend_python:/app
-    depends_on:
-      - qdrant
-      - tts
-      - stt
-      - neo4j
+  # Le backend tourne directement sur l'hôte (voir start.sh / jean-heude-backend.service)
+  # Cela lui permet d'accéder au système de fichiers et aux processus hôte (skills execute_terminal, etc.)
+
   tts:
     build: ./backend_python/tts
     restart: always

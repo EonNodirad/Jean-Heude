@@ -17,7 +17,7 @@ ruff
 pytest
 pytest-asyncio
 
-
+numpy
 tiktoken
 
 watchfiles

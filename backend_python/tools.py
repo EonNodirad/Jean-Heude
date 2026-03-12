@@ -3,6 +3,8 @@ import json
 import importlib.util
 import uuid
 import datetime
+import asyncio
+import logging
 import yaml
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models
@@ -10,7 +12,12 @@ from ollama import AsyncClient
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 import inspect
+
 SKILLS_DIR = "skills"
+MCP_CONNECT_TIMEOUT = 10   # secondes pour établir la connexion MCP
+MCP_TOOL_TIMEOUT = 30      # secondes pour l'exécution d'un outil MCP
+
+logger = logging.getLogger("jean_heude.tools")
 
 # Connexions locales pour le JIT
 qdrant = AsyncQdrantClient(host=os.getenv("URL_QDRANT"), port=6333)
@@ -77,24 +84,26 @@ async def get_mcp_tools() -> list:
         )
         
         try:
-            async with stdio_client(server_params) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    tools_response = await session.list_tools()
-                    
-                    for t in tools_response.tools:
-                        # 💡 ASTUCE : Préfixe pour savoir vers quel serveur router la commande
-                        prefixed_name = f"mcp_{server_name}___{t.name}"
-                        all_mcp_tools.append({
-                            "type": "function",
-                            "function": {
-                                "name": prefixed_name,
-                                "description": f"[{server_name}] {t.description}",
-                                "parameters": t.inputSchema
-                            }
-                        })
+            async with asyncio.timeout(MCP_CONNECT_TIMEOUT):
+                async with stdio_client(server_params) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        tools_response = await session.list_tools()
+
+                        for t in tools_response.tools:
+                            prefixed_name = f"mcp_{server_name}___{t.name}"
+                            all_mcp_tools.append({
+                                "type": "function",
+                                "function": {
+                                    "name": prefixed_name,
+                                    "description": f"[{server_name}] {t.description}",
+                                    "parameters": t.inputSchema
+                                }
+                            })
+        except asyncio.TimeoutError:
+            logger.warning("[MCP] Timeout lors du chargement du serveur '%s'.", server_name)
         except Exception as e:
-            print(f"❌ [MCP] Impossible de charger le serveur '{server_name}' : {e}")
+            logger.error("[MCP] Impossible de charger le serveur '%s' : %s", server_name, e)
             
     return all_mcp_tools
 # ==========================================
@@ -107,83 +116,89 @@ async def _get_tool_embedding(text: str):
         response = await ollama_client.embeddings(model="nomic-embed-text", prompt=text)
         return response["embedding"]
     except Exception as e:
-        print(f"⚠️ [Ollama] Impossible de générer l'embedding (Serveur hors ligne ?): {e}")
+        logger.warning("[Ollama] Impossible de générer l'embedding (Serveur hors ligne ?) : %s", e)
         return None
 
 async def sync_skills_to_qdrant():
     """Indexe TOUS les outils (Skills Python + Serveurs MCP) dans Qdrant au démarrage."""
     if not os.path.exists(SKILLS_DIR):
         os.makedirs(SKILLS_DIR)
-        
+
     try:
         await qdrant.delete_collection("jean_heude_skills")
-        print("🧹 Nettoyage des anciens skills en mémoire...")
-    except Exception:
-        pass # Si ça plante, c'est juste qu'elle n'existait pas encore. Pas grave !
+        logger.info("Nettoyage des anciens skills en mémoire.")
+    except Exception as e:
+        logger.debug("Suppression 'jean_heude_skills' ignorée : %s", e)
 
-    # --- 2. CRÉATION (On reconstruit du neuf) ---
-    print("📦 Création de la collection Qdrant 'jean_heude_skills'...")
-    await qdrant.create_collection(
-        collection_name="jean_heude_skills",
-        vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE),
-    )
+    logger.info("Création de la collection Qdrant 'jean_heude_skills'...")
+    try:
+        await qdrant.create_collection(
+            collection_name="jean_heude_skills",
+            vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE),
+        )
+    except Exception as e:
+        if "already exists" in str(e).lower():
+            logger.warning("Collection 'jean_heude_skills' déjà existante, suppression forcée et recréation.")
+            await qdrant.delete_collection("jean_heude_skills")
+            await qdrant.create_collection(
+                collection_name="jean_heude_skills",
+                vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE),
+            )
+        else:
+            raise
     try:
         await qdrant.get_collection("jean_heude_knowledge")
     except Exception:
-        print("🧠 Création de la mémoire à long terme 'jean_heude_knowledge'...")
+        logger.info("Création de la mémoire à long terme 'jean_heude_knowledge'...")
         await qdrant.create_collection(
             collection_name="jean_heude_knowledge",
             vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE),
         )
     points = []
-    
-    # --- 1. INDEXATION DES SKILLS LOCAUX (PYTHON) ---
+
     for skill_folder in os.listdir(SKILLS_DIR):
         folder_path = os.path.join(SKILLS_DIR, skill_folder)
         manifest_path = os.path.join(folder_path, "manifest.json")
-        
+
         if os.path.isdir(folder_path) and os.path.exists(manifest_path):
             with open(manifest_path, "r", encoding="utf-8") as f:
                 manifest = json.load(f)
-            
+
             text_to_embed = f"{manifest.get('name')} : {manifest.get('description')}"
             vector = await _get_tool_embedding(text_to_embed)
             if not vector:
-                print(f"⚠️ Impossible d'indexer le skill local '{skill_folder}' car les embeddings sont indisponibles.")
+                logger.warning("Impossible d'indexer le skill local '%s' : embeddings indisponibles.", skill_folder)
                 continue
 
             stable_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, skill_folder))
-            
+
             points.append(models.PointStruct(
                 id=stable_id,
                 vector=vector,
                 payload={"source": "local", "folder": skill_folder, "manifest": manifest}
             ))
 
-    # --- 2. INDEXATION DES OUTILS MCP (YAML) ---
-    print("🔌 Connexion aux serveurs MCP pour indexation...")
+    logger.info("Connexion aux serveurs MCP pour indexation...")
     outils_mcp = await get_mcp_tools()
     for outil in outils_mcp:
         manifest = outil["function"]
         text_to_embed = f"{manifest.get('name')} : {manifest.get('description')}"
         vector = await _get_tool_embedding(text_to_embed)
         if not vector:
-            print(f"⚠️ Impossible d'indexer l'outil MCP '{manifest.get('name')}' car les embeddings sont indisponibles.")
+            logger.warning("Impossible d'indexer l'outil MCP '%s' : embeddings indisponibles.", manifest.get('name'))
             continue
-            
-        # On crée un ID unique basé sur le nom préfixé de l'outil MCP
+
         stable_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, manifest.get('name')))
-        
+
         points.append(models.PointStruct(
             id=stable_id,
             vector=vector,
             payload={"source": "mcp", "manifest": manifest}
         ))
 
-    # --- 3. ENVOI À QDRANT ---
     if points:
         await qdrant.upsert(collection_name="jean_heude_skills", points=points)
-        print(f"✅ {len(points)} Outils au total (Locaux + MCP) indexés dans Qdrant !")
+        logger.info("%d outils (Locaux + MCP) indexés dans Qdrant.", len(points))
 
 async def get_relevant_tools(query: str, limit: int = 5, threshold: float = 0.5):
     """ Qdrant décide de TOUT (Locaux et MCP) et respecte la limite."""
@@ -191,7 +206,7 @@ async def get_relevant_tools(query: str, limit: int = 5, threshold: float = 0.5)
     try:
         query_vector = await _get_tool_embedding(query)
         if not query_vector:
-            print("⚠️ Impossible de chercher des outils pertinents : Embeddings indisponibles.")
+            logger.warning("Impossible de chercher des outils pertinents : embeddings indisponibles.")
             return tools_list
         
         # On demande à Qdrant de trouver les meilleurs outils, peu importe leur source !
@@ -221,10 +236,10 @@ async def get_relevant_tools(query: str, limit: int = 5, threshold: float = 0.5)
                     "function": manifest
                 })
     except Exception as e:
-        print(f"⚠️ Erreur JIT Qdrant: {e}")
+        logger.warning("Erreur JIT Qdrant: %s", e)
 
     tool_names = [t["function"]["name"] for t in tools_list]
-    print(f"⚡ [JIT Unifié] Outils sélectionnés par l'IA ({len(tools_list)}/{limit}) : {tool_names}")
+    logger.info("[JIT] Outils sélectionnés (%d/%d) : %s", len(tools_list), limit, tool_names)
     return tools_list
 
 # 👤 AJOUT du paramètre user_id avec "invite" par défaut
@@ -259,58 +274,58 @@ async def call_tool_execution(tool_name: str, arguments: dict, user_id: str = "i
             env={**os.environ, **resolved_env}
         )
         
-        print(f"🔌 [MCP] Exécution de {real_tool_name} sur le serveur {server_name}...")
+        logger.info("[MCP] Exécution de %s sur le serveur %s...", real_tool_name, server_name)
         try:
-            async with stdio_client(server_params) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    result = await session.call_tool(real_tool_name, arguments)
-                    
-                    if result.content:
-                        texte_resultat = ""
-                        # On parcourt tous les blocs renvoyés par l'outil
-                        for block in result.content:
-                            # Si le bloc se déclare comme étant du texte
-                            if getattr(block, "type", "") == "text":
-                                # On extrait la propriété "text" dynamiquement pour rassurer Pyright
-                                contenu_texte = getattr(block, "text", "")
-                                texte_resultat += str(contenu_texte)
-                                
-                        if texte_resultat:
-                        
-                        # ==========================================
-                        # 🧠 L'INTERCEPTEUR DE MÉMOIRE (AUTO-CACHE GLOBAL)
-                        # ==========================================
-                            if server_name in ["brave-search", "world_monitor", "puppeteer", "meteo"]:
-                                try:
-                                    print(f"💾 [Auto-Cache] Enregistrement du savoir Global depuis '{server_name}'...")
-                                    date_actuelle = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                    
-                                    extrait = texte_resultat[:1500] 
-                                    texte_a_memoriser = f"Date de l'info: {date_actuelle} | Source: {server_name} | Requête: {arguments} | Contenu: {extrait}"
-                                    
-                                    vector = await _get_tool_embedding(texte_a_memoriser)
-                                    
-                                    # Sauvegarde dans le Savoir Universel (sans user_id)
-                                    await qdrant.upsert(
-                                        collection_name="jean_heude_knowledge",
-                                        points=[models.PointStruct(
-                                            id=str(uuid.uuid4()), 
-                                            vector=vector, 
-                                            payload={
-                                                "source": server_name, 
-                                                "date": date_actuelle, 
-                                                "contenu": texte_a_memoriser
-                                            }
-                                        )]
-                                    )
-                                    print("✅ [Auto-Cache] Savoir Universel stocké !")
-                                except Exception as mem_err:
-                                    print(f"⚠️ Erreur lors de la mémorisation automatique : {mem_err}")
+            async with asyncio.timeout(MCP_TOOL_TIMEOUT):
+                async with stdio_client(server_params) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        result = await session.call_tool(real_tool_name, arguments)
 
-                        return texte_resultat
-                        
-                    return "✅ Outil MCP exécuté avec succès (pas de retour texte)."
+                        if result.content:
+                            texte_resultat = ""
+                            for block in result.content:
+                                if getattr(block, "type", "") == "text":
+                                    contenu_texte = getattr(block, "text", "")
+                                    texte_resultat += str(contenu_texte)
+
+                            if texte_resultat:
+                            # ==========================================
+                            # 🧠 L'INTERCEPTEUR DE MÉMOIRE (AUTO-CACHE GLOBAL)
+                            # ==========================================
+                                if server_name in ["brave-search", "world_monitor", "puppeteer", "meteo"]:
+                                    try:
+                                        logger.info("[Auto-Cache] Enregistrement du savoir depuis '%s'...", server_name)
+                                        date_actuelle = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                                        extrait = texte_resultat[:1500]
+                                        texte_a_memoriser = f"Date de l'info: {date_actuelle} | Source: {server_name} | Requête: {arguments} | Contenu: {extrait}"
+
+                                        vector = await _get_tool_embedding(texte_a_memoriser)
+                                        if not vector:
+                                            raise ValueError("Embedding indisponible")
+
+                                        await qdrant.upsert(
+                                            collection_name="jean_heude_knowledge",
+                                            points=[models.PointStruct(
+                                                id=str(uuid.uuid4()),
+                                                vector=vector,
+                                                payload={
+                                                    "source": server_name,
+                                                    "date": date_actuelle,
+                                                    "contenu": texte_a_memoriser
+                                                }
+                                            )]
+                                        )
+                                        logger.info("[Auto-Cache] Savoir Universel stocké.")
+                                    except Exception as mem_err:
+                                        logger.warning("Erreur lors de la mémorisation automatique : %s", mem_err)
+
+                            return texte_resultat
+
+                        return "✅ Outil MCP exécuté avec succès (pas de retour texte)."
+        except asyncio.TimeoutError:
+            return f"❌ Timeout ({MCP_TOOL_TIMEOUT}s) lors de l'exécution de '{real_tool_name}'."
         except Exception as e:
             return f"❌ Erreur d'exécution MCP : {e}"
 

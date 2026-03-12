@@ -1,0 +1,35 @@
+# Jean-Heude — Service systemd : Gateway Discord (production)
+#
+# Installation :
+#   1. Remplir les 3 champs marqués <...> ci-dessous
+#   2. sudo cp jean-heude-discord.service /etc/systemd/system/
+#   3. sudo systemctl daemon-reload
+#   4. sudo systemctl enable jean-heude-discord
+#   5. sudo systemctl start jean-heude-discord
+#
+# Logs :
+#   journalctl -u jean-heude-discord -f
+
+[Unit]
+Description=Jean-Heude Gateway Discord
+After=network.target jean-heude-backend.service
+Wants=jean-heude-backend.service
+
+[Service]
+Type=simple
+
+# --- Remplir ces 3 champs ---
+User=<TON_USER>
+WorkingDirectory=<CHEMIN_ABSOLU>/backend_python
+EnvironmentFile=<CHEMIN_ABSOLU>/backend_python/.env
+# ----------------------------
+
+ExecStart=<CHEMIN_ABSOLU>/backend_python/.venv/bin/python discord_gateway.py
+
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

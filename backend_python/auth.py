@@ -2,17 +2,31 @@ import sqlite3
 import os
 import hashlib
 import secrets
+import logging
 import jwt
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
 load_dotenv()
 
+logger = logging.getLogger("jean_heude.auth")
+
 # ✅ CHEMIN GLOBAL POUR L'AUTHENTIFICATION
 DB_PATH = "memory/auth.db"
 
 # ✅ CLEF JWT
-SECRET_KEY = os.getenv("JEAN_HEUDE_SECRET", secrets.token_hex(32))
+_raw_secret = os.getenv("JEAN_HEUDE_SECRET", "")
+if len(_raw_secret) < 32:
+    if _raw_secret:
+        logger.warning(
+            "JEAN_HEUDE_SECRET est trop court (%d caractères). "
+            "Un secret temporatoire aléatoire est utilisé — les sessions ne survivront pas aux redémarrages. "
+            "Définissez une valeur d'au moins 32 caractères dans votre .env.",
+            len(_raw_secret),
+        )
+    SECRET_KEY = secrets.token_hex(32)
+else:
+    SECRET_KEY = _raw_secret
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 30
 
@@ -93,7 +107,7 @@ def setup_new_user_workspace(user_id: str):
             f.write("--- SOUVENIRS ET FAITS EXTRAITS ---\n")
             f.write("(C'est ici que je stocke ce que je retiens de nos échanges importants)\n")
             
-    print(f"📁 Espace de travail initialisé (USER, AGENTS, MEMORY) pour : {user_id}")
+    logger.info("Espace de travail initialisé pour : %s", user_id)
 
 def create_global_account(user_id: str, password: str) -> bool:
     """Étape 1 : L'utilisateur crée son compte maître."""
@@ -113,7 +127,7 @@ def create_global_account(user_id: str, password: str) -> bool:
     
     # On prépare son espace physique instantanément
     setup_new_user_workspace(user_id)
-    print(f"🎉 Nouveau compte global créé : {user_id}")
+    logger.info("Nouveau compte global créé : %s", user_id)
     return True
 
 def link_platform_account(platform: str, platform_user_id: str, global_user_id: str, password: str) -> bool:
@@ -142,7 +156,7 @@ def link_platform_account(platform: str, platform_user_id: str, global_user_id: 
     conn.commit()
     conn.close()
     
-    print(f"🔗 Lien créé : {platform} ({platform_user_id}) pointe désormais vers le compte {global_user_id}")
+    logger.info("Lien créé : %s (%s) -> compte %s", platform, platform_user_id, global_user_id)
     return True
 
 def get_global_user_id(platform: str, platform_user_id: str) -> str | None:

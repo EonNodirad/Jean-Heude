@@ -2,6 +2,10 @@ node_modules
 
 .venv/
 
+# Cache généré automatiquement
+backend_python/anchor_vectors_cache.json
+.pids/
+
 # Output
 .output
 .vercel
@@ -42,3 +46,5 @@ neo4j_logs/
 
 # Analyse IA
 analys_jean_heude.md
+.claude
+CLAUDE.md
