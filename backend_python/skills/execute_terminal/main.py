@@ -1,5 +1,4 @@
 import asyncio
-import os
 
 async def run(command: str) -> str:
     """Exécute une commande terminal de manière asynchrone avec un filet de sécurité."""

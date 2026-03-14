@@ -30,12 +30,13 @@ services:
     ports:
       - "8001:8001"
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        PUBLIC_URL_SERVEUR_PYTHON: http://localhost:8000
     restart: always
     ports:
       - "3004:3000"
-    env_file:
-      - ./frontend/.env
     extra_hosts:
       - "host.docker.internal:host-gateway"
   neo4j:

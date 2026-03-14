@@ -7,15 +7,26 @@
 		resume: string;
 	}
 
-	let { historiques, sessionActive, onLoadConversation } = $props<{
+	let {
+		historiques,
+		sessionActive,
+		onLoadConversation,
+		open = true,
+		onClose
+	} = $props<{
 		historiques: Historique[];
 		sessionActive: number | null;
 		onLoadConversation: (id: number) => void;
+		open?: boolean;
+		onClose?: () => void;
 	}>();
 </script>
 
-<div class="historique-windows">
-	<h2 class="historique-titre">Historique des conversations</h2>
+<div class="historique-windows" class:open>
+	<div class="historique-header">
+		<h2 class="historique-titre">Historique</h2>
+		<button class="close-btn" onclick={onClose} aria-label="Fermer">✕</button>
+	</div>
 
 	<div class="liste-scrollable">
 		{#each historiques as historique (historique.id)}
@@ -40,11 +51,54 @@
 <style>
 	.historique-windows {
 		height: 100vh;
-		width: 20%;
+		width: 260px;
+		min-width: 260px;
 		background-color: #111827;
 		color: #f3f4f6;
 		display: flex;
 		flex-direction: column;
+		flex-shrink: 0;
+	}
+
+	.historique-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding-right: 12px;
+	}
+
+	.close-btn {
+		all: unset;
+		cursor: pointer;
+		font-size: 1.2rem;
+		color: #9ca3af;
+		display: none;
+		padding: 4px 8px;
+		border-radius: 6px;
+		transition: color 0.2s;
+	}
+	.close-btn:hover {
+		color: #f3f4f6;
+	}
+
+	@media (max-width: 768px) {
+		.historique-windows {
+			position: fixed;
+			top: 0;
+			left: 0;
+			z-index: 200;
+			transform: translateX(-100%);
+			transition: transform 0.3s ease;
+			width: 80%;
+			max-width: 300px;
+			box-shadow: 4px 0 20px rgba(0, 0, 0, 0.5);
+		}
+		.historique-windows.open {
+			transform: translateX(0);
+		}
+		.close-btn {
+			display: block;
+		}
 	}
 	.liste-scrollable {
 		flex: 1;
@@ -54,7 +108,12 @@
 
 	.historique-titre {
 		padding-left: 5%;
-		font-size: 35px;
+		font-size: 1.1rem;
+		font-weight: 600;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+		color: #9ca3af;
+		margin: 16px 0 8px 0;
 	}
 	.message-historique {
 		all: unset;
@@ -114,6 +173,7 @@
 		width: 100%;
 		height: 60px;
 		padding: 0 15px;
-		background-color: #111827;
+		flex-shrink: 0;
+		box-sizing: border-box;
 	}
 </style>

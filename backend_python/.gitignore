@@ -4,3 +4,6 @@
 !.env.example
 !.env.test
 
+# Cache local des embeddings d'outils
+tools_embeddings_cache.json
+

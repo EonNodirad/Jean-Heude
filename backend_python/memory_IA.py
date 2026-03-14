@@ -4,14 +4,11 @@ import re
 import uuid
 import time
 import httpx
-import aiosqlite
 from typing import AsyncGenerator, Any
 from dotenv import load_dotenv
 import tools
 from IA import Orchestrator
 from ollama import AsyncClient
-from qdrant_client import AsyncQdrantClient
-from qdrant_client.http import models
 
 from database.file_repo import FileRepo
 from database.memory_manager import memory_manager
@@ -90,7 +87,7 @@ def clean_text_for_tts(text):
 
 
 async def decide_model(message:str):
-    relevant_tools = await tools.get_relevant_tools(message, limit=15)
+    relevant_tools = await tools.get_relevant_tools(message, limit=10)
     chosen_model = await orchestrator.choose_model(message, relevant_tools)
     print(f"--- 🎯 Décision : {chosen_model} ---")
     return chosen_model
@@ -151,7 +148,7 @@ async def chat_with_memories(history: list, chosen_model: str, user_id: str = "d
     print(f"🔍 Recherche mémoire hybride et outils pour : {last_user_message}")
 
     # On lance SEULEMENT la sélection d'outils, le contexte est déjà dans l'history (préparé par agent_runner)
-    tools_task = tools.get_relevant_tools(last_user_message, limit=20)
+    tools_task = tools.get_relevant_tools(last_user_message, limit=12)
     available_tools = await tools_task
 
     print("✅ Fin de la recherche mémoire")
@@ -167,7 +164,7 @@ async def chat_with_memories(history: list, chosen_model: str, user_id: str = "d
             system_merged = True
             
     if not system_merged:
-        messages.insert(0, {"role": "system", "content": f"Tu es Jean-Heude."})
+        messages.insert(0, {"role": "system", "content": "Tu es Jean-Heude."})
 
     assistant_final_text = ""
 

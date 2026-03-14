@@ -7,7 +7,7 @@ if chemin_racine not in sys.path:
     sys.path.append(chemin_racine)
 
 # 2. Maintenant Python sait trouver ton fichier memory.py !
-import memory
+import memory  # noqa: E402
 
 async def run(action: str, content: str = "") -> str:
     """Gère le fichier MEMORY.md de Jean-Heude."""

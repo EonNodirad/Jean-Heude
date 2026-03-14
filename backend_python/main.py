@@ -17,7 +17,6 @@ from collections import defaultdict
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 from database.memory_manager import memory_manager
-from qdrant_client.http import models
 from watchfiles import awatch
 import tools
 import base64
@@ -43,7 +42,7 @@ def _check_rate_limit(ip: str):
     _login_attempts[ip].append(now)
 
 # ✅ IMPORT DE L'AUTHENTIFICATION
-from auth import init_auth_db, create_global_account, verify_password, create_access_token, decode_access_token
+from auth import init_auth_db, create_global_account, verify_password, create_access_token, decode_access_token  # noqa: E402
 
 async def get_current_user_dt(authorization: str = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):

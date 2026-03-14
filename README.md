@@ -59,7 +59,16 @@ To get Jean-Heude up and running, you will need:
 
 ## 📈 Version History
 
-### **V5.0 (Current) — The "Clean Architecture" & Security Era**
+### **V5.1 (Current) — The "MCP Expansion" & Optimization Era**
+- **worldmonitor-mcp integration:** 107 tools across 32 services (markets, military, geopolitics, DeFi, SEC EDGAR, CFTC, conflict data...) replacing the previous world monitor. Configured via `WORLDMONITOR_BASE_URL`.
+- **Tool embeddings cache:** SHA256-based invalidation — embeddings are computed once and stored in a local JSON file. Subsequent restarts load from cache (~20s saved). Auto-invalidated on `mcp_servers.yaml` or skill manifest changes.
+- **JIT tool selection tuning:** Cosine similarity threshold raised to 0.62 (was 0.5) and limits tightened (10 for model selection, 12 for inference) — LLM receives fewer, more relevant tools.
+- **Multimodal pipeline refactor:** Vision model (`minicpm-v:8b`) now runs without tools (function calling is unstable on small vision models). Image analysis is injected as context into `process_chat` which handles reasoning and tool use.
+- **UI fixes:** User chat bubbles right margin, sidebar gear button alignment (`flex-shrink: 0`, `box-sizing: border-box`).
+- **Docker build speed:** `src-tauri` (9.4GB Rust artifacts) excluded from frontend Docker context — build time reduced from ~600s to ~30s.
+- **URL injection via Docker ARG:** `PUBLIC_URL_SERVEUR_PYTHON` baked at build time via `.env.local`, not at runtime. Eliminates `$env/dynamic/public` SSR crash.
+
+### **V5.0 — The "Clean Architecture" & Security Era**
 - **Robust Security overhaul:** Complete replacement of raw websocket payloads with a strict **JWT (JSON Web Token)** authentication middleware across all FastAPI routes.
 - **Memory Manager Facade:** Eradication of "God Classes" (`AgentRunner` and `MemoryIA`). Database interactions are firmly decoupled via a unified backend Manager.
 - **Massive Performance Boost:** Context gathering for the System Prompt operates in full asynchronous parallel (Neo4j + Qdrant + WebCache + SQLite) saving roughly 60% of idle reasoning latency.

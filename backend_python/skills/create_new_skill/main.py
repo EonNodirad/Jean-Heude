@@ -14,7 +14,7 @@ async def run(skill_name: str, description: str, parameters_schema: str, python_
             params = json.loads(parameters_schema)
         else:
             params = parameters_schema
-    except:
+    except Exception:
         params = {} # Fallback sans paramètres
 
     # 3. Génération du manifest.json

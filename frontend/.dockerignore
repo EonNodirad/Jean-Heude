@@ -2,4 +2,6 @@ node_modules
 .svelte-kit
 build
 .env
-pnpm-lock.yaml
+src-tauri
+.cache/
+dist/

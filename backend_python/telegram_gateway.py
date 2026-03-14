@@ -22,7 +22,8 @@ agent = AgentRunner()
 user_sessions: dict[int, int] = {} 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message: return
+    if not update.message:
+        return
     await update.message.reply_text(
         "Salut ! Je suis J.E.A.N-H.E.U.D.E, prêt à t'aider depuis Telegram. 🤖\n\n"
         "🔒 Pour me parler, tu dois être connecté.\n"
@@ -31,7 +32,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def register_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.chat: return
+    if not update.message or not update.message.chat:
+        return
     chat_id = update.message.chat_id
     if update.message.chat.type != "private":
         await update.message.reply_text("⚠️ Par mesure de sécurité, crée ton compte en Message Privé !")
@@ -49,7 +51,8 @@ async def register_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Usage correct : `/register <pseudo> <motdepasse>`", parse_mode="Markdown")
 
 async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.chat: return
+    if not update.message or not update.message.chat:
+        return
     chat_id = update.message.chat_id
     if update.message.chat.type != "private":
         await update.message.reply_text("⚠️ Par mesure de sécurité, connecte-toi en Message Privé !")
@@ -68,7 +71,8 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gère le Texte, l'Audio (Vocal via Serveur STT externe) et la Vision (Photos/Documents Image)"""
-    if not update.message or not update.message.chat: return
+    if not update.message or not update.message.chat:
+        return
         
     chat_id = update.message.chat_id
     

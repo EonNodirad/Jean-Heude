@@ -129,7 +129,7 @@ class Gateway:
                 try:
                     await ws.send_json({"type": "proactive_message", "content": message})
                     print(f"🖥️ [Gateway] Message poussé en direct sur le WebSocket de {client_id}.")
-                except:
+                except Exception:
                     pass
         else:
             print(f"⚠️ [Gateway] Canal inconnu : {channel}")

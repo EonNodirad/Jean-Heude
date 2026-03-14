@@ -3,12 +3,14 @@ FROM node:20-slim AS builder
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
 WORKDIR /app
-COPY package.json  ./
-
-COPY .npmrc ./
-RUN pnpm install 
+COPY package.json pnpm-lock.yaml .npmrc ./
+RUN pnpm install --frozen-lockfile
 
 COPY . .
+
+# L'URL est injectée via build arg — priorité max (écrase .env.production)
+ARG PUBLIC_URL_SERVEUR_PYTHON=http://localhost:8000
+RUN echo "PUBLIC_URL_SERVEUR_PYTHON=${PUBLIC_URL_SERVEUR_PYTHON}" > .env.local
 RUN pnpm run build
 
 FROM node:20-slim

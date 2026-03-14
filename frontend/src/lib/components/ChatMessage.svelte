@@ -61,7 +61,7 @@
 <style>
 	/* Style pour les liens dans la bulle assistant (pour les news) */
 	:global(.assistant .content-bubble a) {
-		color: #1a2238;
+		color: #38bdf8;
 		text-decoration: underline;
 		font-weight: bold;
 	}
@@ -152,40 +152,38 @@
 	}
 
 	.user {
-		color: black;
+		color: #111827;
 		background-color: #e7644f;
 		margin-left: auto;
-		padding: 7px;
+		margin-right: 20px;
+		padding: 12px 18px;
 		margin-bottom: 15px;
-		border-radius: 50px;
-		max-width: 85%;
+		border-radius: 20px 20px 4px 20px;
+		max-width: 75%;
 		width: fit-content;
-		box-shadow:
-			0 0 30px rgba(255, 154, 139, 0.4),
-			0 0 30px rgba(255, 154, 139, 0.2);
+		box-shadow: 0 2px 12px rgba(231, 100, 79, 0.3);
 		transition: transform 0.2s ease-in-out;
 	}
 	.user:hover {
-		transform: scale(1.02);
-		box-shadow: 0 0 15px rgba(255, 154, 139, 0.6);
+		transform: scale(1.01);
+		box-shadow: 0 4px 20px rgba(231, 100, 79, 0.5);
 	}
 	.assistant {
-		color: black;
-		background-color: #e7644f;
-		margin-right: 0 auto;
+		color: #f3f4f6;
+		background-color: #1e293b;
+		border: 1px solid rgba(231, 100, 79, 0.2);
+		margin-right: auto;
 		margin-bottom: 15px;
 		padding: 20px;
-		border-radius: 50px;
+		border-radius: 20px 20px 20px 4px;
 		width: fit-content;
 		max-width: 85%;
-		box-shadow:
-			0 0 30px rgba(255, 154, 139, 0.4),
-			0 0 30px rgba(255, 154, 139, 0.2);
+		box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
 		transition: transform 0.2s ease-in-out;
 	}
 	.assistant:hover {
-		transform: scale(1.02);
-		box-shadow: 0 0 15px rgba(255, 154, 139, 0.6);
+		transform: scale(1.01);
+		box-shadow: 0 4px 20px rgba(231, 100, 79, 0.2);
 	}
 	:global(.message pre) {
 		background-color: #0d1117;

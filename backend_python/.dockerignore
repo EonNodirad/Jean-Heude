@@ -8,3 +8,6 @@ memory/*.db
 **/__pycache__
 .venv
 memory/
+*.log
+.vscode/
+.idea/

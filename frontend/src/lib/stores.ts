@@ -11,21 +11,21 @@ export const authToken = writable(storedToken);
 
 // À chaque fois que le store change, on met à jour le navigateur
 currentUser.subscribe((value) => {
-    if (browser) {
-        if (value) {
-            window.localStorage.setItem('jean_heude_user', value);
-        } else {
-            window.localStorage.removeItem('jean_heude_user');
-        }
-    }
+	if (browser) {
+		if (value) {
+			window.localStorage.setItem('jean_heude_user', value);
+		} else {
+			window.localStorage.removeItem('jean_heude_user');
+		}
+	}
 });
 
 authToken.subscribe((value) => {
-    if (browser) {
-        if (value) {
-            window.localStorage.setItem('jean_heude_token', value);
-        } else {
-            window.localStorage.removeItem('jean_heude_token');
-        }
-    }
+	if (browser) {
+		if (value) {
+			window.localStorage.setItem('jean_heude_token', value);
+		} else {
+			window.localStorage.removeItem('jean_heude_token');
+		}
+	}
 });

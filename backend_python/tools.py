@@ -1,5 +1,6 @@
 import os
 import json
+import hashlib
 import importlib.util
 import uuid
 import datetime
@@ -16,6 +17,7 @@ import inspect
 SKILLS_DIR = "skills"
 MCP_CONNECT_TIMEOUT = 10   # secondes pour établir la connexion MCP
 MCP_TOOL_TIMEOUT = 30      # secondes pour l'exécution d'un outil MCP
+TOOLS_CACHE_PATH = os.path.join(os.path.dirname(__file__), "tools_embeddings_cache.json")
 
 logger = logging.getLogger("jean_heude.tools")
 
@@ -110,6 +112,23 @@ async def get_mcp_tools() -> list:
 # 🏠 GESTION DES SKILLS LOCAUX (INCHANGÉ)
 # ==========================================
 
+def _compute_tools_hash() -> str:
+    """Calcule un hash SHA256 des sources d'outils (mcp_servers.yaml + manifests skills)."""
+    h = hashlib.sha256()
+    yaml_path = os.path.join(os.path.dirname(__file__), "mcp_servers.yaml")
+    try:
+        with open(yaml_path, "rb") as f:
+            h.update(f.read())
+    except FileNotFoundError:
+        pass
+    if os.path.exists(SKILLS_DIR):
+        for folder in sorted(os.listdir(SKILLS_DIR)):
+            manifest_path = os.path.join(SKILLS_DIR, folder, "manifest.json")
+            if os.path.exists(manifest_path):
+                with open(manifest_path, "rb") as f:
+                    h.update(f.read())
+    return h.hexdigest()
+
 async def _get_tool_embedding(text: str):
     """Génère un vecteur pour la description de l'outil."""
     try:
@@ -119,11 +138,8 @@ async def _get_tool_embedding(text: str):
         logger.warning("[Ollama] Impossible de générer l'embedding (Serveur hors ligne ?) : %s", e)
         return None
 
-async def sync_skills_to_qdrant():
-    """Indexe TOUS les outils (Skills Python + Serveurs MCP) dans Qdrant au démarrage."""
-    if not os.path.exists(SKILLS_DIR):
-        os.makedirs(SKILLS_DIR)
-
+async def _recreate_skills_collection():
+    """Supprime et recrée la collection jean_heude_skills (toujours nécessaire au démarrage)."""
     try:
         await qdrant.delete_collection("jean_heude_skills")
         logger.info("Nettoyage des anciens skills en mémoire.")
@@ -138,7 +154,6 @@ async def sync_skills_to_qdrant():
         )
     except Exception as e:
         if "already exists" in str(e).lower():
-            logger.warning("Collection 'jean_heude_skills' déjà existante, suppression forcée et recréation.")
             await qdrant.delete_collection("jean_heude_skills")
             await qdrant.create_collection(
                 collection_name="jean_heude_skills",
@@ -146,6 +161,14 @@ async def sync_skills_to_qdrant():
             )
         else:
             raise
+
+async def sync_skills_to_qdrant():
+    """Indexe TOUS les outils (Skills Python + Serveurs MCP) dans Qdrant au démarrage.
+    Utilise un cache JSON pour éviter de recalculer les embeddings si rien n'a changé."""
+    if not os.path.exists(SKILLS_DIR):
+        os.makedirs(SKILLS_DIR)
+
+    # Vérifier la collection jean_heude_knowledge (indépendante du cache)
     try:
         await qdrant.get_collection("jean_heude_knowledge")
     except Exception:
@@ -154,6 +177,35 @@ async def sync_skills_to_qdrant():
             collection_name="jean_heude_knowledge",
             vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE),
         )
+
+    # Calcul du hash des sources
+    current_hash = _compute_tools_hash()
+
+    # Tentative de chargement du cache
+    cache = None
+    if os.path.exists(TOOLS_CACHE_PATH):
+        try:
+            with open(TOOLS_CACHE_PATH, "r", encoding="utf-8") as f:
+                cache = json.load(f)
+        except Exception:
+            cache = None
+
+    if cache and cache.get("hash") == current_hash:
+        # Cache valide : upsert direct sans appels Ollama
+        logger.info("✅ Cache embeddings outils valide — chargement depuis JSON (0 appel Ollama).")
+        await _recreate_skills_collection()
+        cached_points = [
+            models.PointStruct(id=p["id"], vector=p["vector"], payload=p["payload"])
+            for p in cache.get("points", [])
+        ]
+        if cached_points:
+            await qdrant.upsert(collection_name="jean_heude_skills", points=cached_points)
+            logger.info("%d outils restaurés depuis le cache.", len(cached_points))
+        return
+
+    # Cache absent ou invalide : re-embedding complet
+    logger.info("🔄 Sources modifiées ou cache absent — calcul des embeddings...")
+    await _recreate_skills_collection()
     points = []
 
     for skill_folder in os.listdir(SKILLS_DIR):
@@ -171,7 +223,6 @@ async def sync_skills_to_qdrant():
                 continue
 
             stable_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, skill_folder))
-
             points.append(models.PointStruct(
                 id=stable_id,
                 vector=vector,
@@ -189,7 +240,6 @@ async def sync_skills_to_qdrant():
             continue
 
         stable_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, manifest.get('name')))
-
         points.append(models.PointStruct(
             id=stable_id,
             vector=vector,
@@ -200,7 +250,22 @@ async def sync_skills_to_qdrant():
         await qdrant.upsert(collection_name="jean_heude_skills", points=points)
         logger.info("%d outils (Locaux + MCP) indexés dans Qdrant.", len(points))
 
-async def get_relevant_tools(query: str, limit: int = 5, threshold: float = 0.5):
+        # Sauvegarde du cache
+        try:
+            cache_data = {
+                "hash": current_hash,
+                "points": [
+                    {"id": p.id, "vector": p.vector, "payload": p.payload}
+                    for p in points
+                ]
+            }
+            with open(TOOLS_CACHE_PATH, "w", encoding="utf-8") as f:
+                json.dump(cache_data, f)
+            logger.info("💾 Cache embeddings sauvegardé (%s).", TOOLS_CACHE_PATH)
+        except Exception as e:
+            logger.warning("Impossible de sauvegarder le cache : %s", e)
+
+async def get_relevant_tools(query: str, limit: int = 5, threshold: float = 0.62):
     """ Qdrant décide de TOUT (Locaux et MCP) et respecte la limite."""
     tools_list = []
     try:

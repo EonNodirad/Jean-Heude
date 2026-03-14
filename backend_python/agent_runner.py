@@ -1,7 +1,6 @@
 import memory_IA as memory
 import re
 import os
-import tools
 import datetime
 import tiktoken
 import asyncio
@@ -88,56 +87,41 @@ class AgentRunner:
         # On retourne la liste compressée pour l'envoyer au LLM
         return compressed_history
 
+    async def _analyze_image(self, prompt: str, image_b64: str) -> str:
+        """Analyse une image via le modèle vision, sans tools. Retourne le texte d'analyse."""
+        messages = [
+            {
+                "role": "system",
+                "content": "Tu es un expert en analyse visuelle. Décris l'image avec précision et exhaustivité. Réponse en texte brut, pas de markdown."
+            },
+            {
+                "role": "user",
+                "content": prompt,
+                "images": [image_b64]
+            }
+        ]
+        response = await self.admin_client.chat(
+            model="openbmb/minicpm-v4.5:8b",
+            messages=messages,
+            stream=False
+        )
+        return response.message.content.strip()
+
     async def process_multimodal_chat(self, prompt: str, image_b64: str | None, image_path: str|None, session_id: int | None, user_id: str, stream_callback):
-        print(f"⚙️ AgentRunner: Traitement multimodal pour session {session_id}")
-        # 1. On charge l'historique directement depuis MemoryManager
-        memory_context = []
-        if session_id:
-            memory_context = await memory_manager.get_recent_history(session_id, 20)
-        
-        # 2. Le System Prompt spécifique à la vision
-        os_context = self._load_os_context(user_id)
-        hybrid_context = await memory_manager.get_hybrid_context(user_id, prompt)
-        
-        system_prompt = {
-            "role": "system",
-            "content": (
-                f"{os_context}\n\n"
-                f"{hybrid_context}\n\n"
-                "--- INSTRUCTION SPÉCIALE MULTIMODALE ---\n"
-                "Tu as des yeux. Analyse l'image fournie avec une précision d'expert technique."
-            )
-        }
-        
-        # 3. Message utilisateur avec l'image
-        user_message: dict[str, Any] = {"role": "user", "content": prompt}
-        if image_b64:
-            user_message["images"] = [image_b64]
-            print("🖼️ Image B64 injectée avec succès pour Qwen3-VL.")
+        print(f"⚙️ AgentRunner: Analyse image pour session {session_id}")
 
-        full_messages = [system_prompt] + memory_context + [user_message]
-        vision_model = "qwen3-vl:8b" 
+        # 1. Analyse visuelle sans tools (le modèle vision ne gère pas bien le function calling)
+        await stream_callback("¶🖼️ Analyse de l'image en cours...")
+        image_analysis = await self._analyze_image(prompt, image_b64 or "")
+        print(f"🖼️ Analyse image terminée ({len(image_analysis)} chars)")
 
-        # 4. Récupération des outils pertinents
-        relevant_tools = await tools.get_relevant_tools(prompt, limit=3)
-
-        # 5. On prépare une variable pour stocker la réponse finale de l'assistant
-        assistant_final_text = ""
-
-        async for token in memory.execute_agent_loop(full_messages, vision_model, available_tools=relevant_tools, mute_audio=True):
-            await stream_callback(token)
-            
-            # On attrape les mots au vol, on ignore la pensée (¶) et l'audio
-            clean_chunk = re.sub(r'\|\|AUDIO_ID:.*?\|\|', '', token)
-            if not clean_chunk.startswith("¶"): 
-                assistant_final_text += clean_chunk
-        
-        # 6. Sauvegarde BDD (Utilisateur ET Assistant)
+        # 2. Sauvegarder le message utilisateur avec l'image
         if session_id:
             await memory_manager.save_message(user_id, session_id, "user", prompt, image_path)
-            
-            if assistant_final_text.strip():
-                await memory_manager.save_message(user_id, session_id, "assistant", assistant_final_text.strip())
+
+        # 3. Enrichir le prompt avec l'analyse et déléguer à process_chat
+        enriched_prompt = f"{prompt}\n\n[Analyse de l'image jointe]\n{image_analysis}"
+        return await self.process_chat(enriched_prompt, session_id, user_id, stream_callback, is_hidden=True)
 
     # _recall_web_knowledge a été déplacé dans memory_manager.py
         
@@ -149,8 +133,9 @@ class AgentRunner:
             session_id = await memory_manager.create_session(user_id, resume)
             print(f"🆕 Nouvelle session créée : ID {session_id} pour {user_id}")
 
-        # 2. Sauvegarde du message utilisateur
-        await memory_manager.save_message(user_id, session_id, "user", text_content)
+        # 2. Sauvegarde du message utilisateur (sauf si déjà sauvegardé, ex: flux multimodal)
+        if not is_hidden:
+            await memory_manager.save_message(user_id, session_id, "user", text_content)
         
         # 3. Préparation du contexte (Optimisation RAM/Parallel)
         os_context = self._load_os_context(user_id)
@@ -186,6 +171,9 @@ class AgentRunner:
         # Assemblage final des messages
         contexte_message = [{"role": "system", "content": system_content}]
         contexte_message.extend(messages_db)
+        # En mode is_hidden (ex: multimodal), le message user n'est pas en DB → l'injecter ici
+        if is_hidden:
+            contexte_message.append({"role": "user", "content": text_content})
         # --- 4. DÉCLENCHEMENT DU CONTEXT GUARD (Compaction si nécessaire) ---
         current_tokens = self.count_tokens(contexte_message)
         if current_tokens > self.max_tokens:

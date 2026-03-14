@@ -9,8 +9,8 @@ from pathlib import Path
 CACHE_FILE = Path(__file__).parent / "anchor_vectors_cache.json"
 ANCHORS_FILE = Path(__file__).parent / "task_anchors.py"
 
-from ollama import AsyncClient
-from dotenv import load_dotenv
+from ollama import AsyncClient  # noqa: E402
+from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv()
 remote_host = os.getenv("URL_SERVER_OLLAMA")
@@ -33,7 +33,7 @@ def chat(chat_message, model_used):
     return assistant_message
 
 
-from task_anchors import TASK_ANCHORS
+from task_anchors import TASK_ANCHORS  # noqa: E402
 
 
 class Orchestrator:
@@ -192,7 +192,7 @@ class Orchestrator:
         """
         all_models = await self.get_local_models()
 
-        blacklist = ["embed", "classification", "rerank", "vision", "deepcoder:14b", "qwen3-vl"]
+        blacklist = ["embed", "classification", "rerank", "vision", "deepcoder:14b", "qwen3-vl","openbmb/minicpm-v4.5:8b"]
         enriched = []
         for m in all_models:
             if any(w in m.lower() for w in blacklist):

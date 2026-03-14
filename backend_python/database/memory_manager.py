@@ -41,14 +41,13 @@ class MemoryManager:
         vector_task = tools._get_tool_embedding(prompt)
         keywords = prompt.split()
         
-        qdrant_memories = []
-        sqlite_memories = []
         graph_context = ""
 
         # 2. Exécution parallèle
         vector = await vector_task
         async def fetch_q() -> list:
-            if not vector: return []
+            if not vector:
+                return []
             try:
                 return await self.qdrant.search_memories("jean_heude_memories", vector, user_id, limit)
             except Exception as e:
@@ -56,7 +55,8 @@ class MemoryManager:
                 return []
 
         async def fetch_s() -> list:
-            if not keywords: return []
+            if not keywords:
+                return []
             try:
                 k_results = await self.sqlite.search_keyword_memory(keywords)
                 return k_results

@@ -45,8 +45,10 @@ async def on_message(message: discord.Message):
     # ==========================================
     if msg_content.startswith('/register'):
         if not isinstance(message.channel, discord.DMChannel):
-            try: await message.delete() 
-            except: pass
+            try:
+                await message.delete()
+            except Exception:
+                pass
             await message.channel.send("⚠️ Par mesure de sécurité, crée ton compte en Message Privé !")
             return
 
@@ -64,8 +66,10 @@ async def on_message(message: discord.Message):
 
     if msg_content.startswith('/login'):
         if not isinstance(message.channel, discord.DMChannel):
-            try: await message.delete() 
-            except: pass
+            try:
+                await message.delete()
+            except Exception:
+                pass
             await message.channel.send("⚠️ Par mesure de sécurité, connecte-toi en Message Privé !")
             return
 
@@ -152,8 +156,10 @@ async def on_message(message: discord.Message):
                 await message.channel.send("Désolé, mon module auditif est hors ligne. 🙉")
                 return
             finally:
-                try: await temp_msg.delete() 
-                except: pass
+                try:
+                    await temp_msg.delete()
+                except Exception:
+                    pass
 
         # 🖼️ CAS 2 : IMAGE (Photo)
         elif mime.startswith("image/"):

@@ -2,7 +2,8 @@
 	import nouvelleDiscussion from '$lib/assets/nouvelle-discussion.svg';
 	import trombone from '$lib/assets/trombone.png';
 	import micro from '$lib/assets/les-ondes-radio.png';
-	import type { } from 'svelte'; // Svelte 5 trigger
+	import type {} from 'svelte'; // Svelte 5 trigger
+	import type { createRecorder } from '$lib/voice.svelte';
 
 	let {
 		currentMessage = $bindable(''),
@@ -16,7 +17,7 @@
 	} = $props<{
 		currentMessage: string;
 		attente: boolean;
-		recorder: any;
+		recorder: ReturnType<typeof createRecorder>;
 		onSendMessage: (e: Event | null, file: File | null) => Promise<void>;
 		onNewChat: () => void;
 		onFileSelect: (file: File | null, url: string | null) => void;
@@ -118,16 +119,29 @@
 		transform: scale(1.2);
 	}
 	.chatter {
-		background-color: black;
+		background-color: #0f172a;
+		border: 1px solid rgba(255, 255, 255, 0.06);
 		border-radius: 50px;
 		display: flex;
 		padding: 7px 0 7px 0;
 		align-items: center;
 		justify-content: center;
-		margin: 0 auto;
+		margin: 0 auto 12px auto;
 		width: 90%;
+		max-width: 860px;
 		color: #f3f4f6;
-		position: relative; /* Pour positionner l'image relative à la box */
+		position: relative;
+	}
+
+	@media (max-width: 768px) {
+		.chatter {
+			width: 96%;
+			border-radius: 30px;
+			margin-bottom: 8px;
+		}
+		.chatter:hover {
+			transform: none;
+		}
 	}
 	.chat {
 		all: unset;

@@ -5,7 +5,7 @@
 	"identifier": "com.noeda.desktop-jh",
 	"build": {
 		"beforeDevCommand": "pnpm dev",
-		"devUrl": "http://localhost:5173",
+		"devUrl": "http://localhost:3004",
 		"beforeBuildCommand": "pnpm build",
 		"frontendDist": "../build"
 	},
