@@ -1,0 +1,16 @@
+{
+    "name": "execute_terminal",
+    "description": "Exécute une commande dans le terminal (shell/bash/powershell) du système hôte et retourne le résultat. Utilise cet outil pour interagir avec l'OS, lire des répertoires, installer des paquets, lancer des scripts ou gérer des processus. Ne lance pas de commandes interactives (qui demandent une saisie utilisateur) ou infinies.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "command": {
+                "type": "string",
+                "description": "La ligne de commande exacte à exécuter (ex: 'ls -la', 'dir', 'pip install requests')."
+            }
+        },
+        "required": [
+            "command"
+        ]
+    }
+}

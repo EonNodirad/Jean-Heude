@@ -1,22 +1,22 @@
-# agent_runner.py
-import aiosqlite
-import memory
+import memory_IA as memory
 import re
 import os
-import tools
+import datetime
 import tiktoken
+import asyncio
 from ollama import AsyncClient
 from functools import wraps
+from database.file_repo import FileRepo
+from database.memory_manager import memory_manager
 
 def session_guard(func):
     """Garantit que chaque agent dispose d'un espace de travail isolé."""
     @wraps(func)
-    async def wrapper(self, text_content: str, session_id: int | None, on_token_callback):
+    async def wrapper(self, *args, **kwargs):
+        session_id = args[1] if len(args) > 1 else kwargs.get('session_id')
         print(f"🛡️ [Session Guard] Isolation de la session {session_id or 'Nouvelle'}")
-        return await func(self, text_content, session_id, on_token_callback)
+        return await func(self, *args, **kwargs)
     return wrapper
-
-
 class AgentRunner:
     def __init__(self):
         self.encoder = tiktoken.get_encoding("cl100k_base")
@@ -26,12 +26,14 @@ class AgentRunner:
         self.admin_client = AsyncClient(host=os.getenv("URL_SERVER_OLLAMA"))
         self.admin_model = "llama3.1:8b" 
         
+    def _load_os_context(self, user_id: str) -> str:
+        return FileRepo.load_os_context(user_id)
     def count_tokens(self, messages: list) -> int:
         """Compte les jetons d'un historique complet."""
         text = " ".join([str(m["content"]) for m in messages])
         return len(self.encoder.encode(text))
 
-    async def _context_window_guard(self, history: list) -> list:
+    async def _context_window_guard(self, history: list,user_id: str) -> list:
         """
         Génère un prompt compressé (Head + Résumé + Tail) À LA VOLÉE.
         Ne modifie AUCUNE base de données pour préserver l'UI.
@@ -55,148 +57,148 @@ class AgentRunner:
             f"S'il n'y a rien d'important, réponds 'AUCUN'.\n\nHistorique:\n{middle_text}"
         )
         res_facts = await self.admin_client.chat(model=self.admin_model, messages=[{"role": "user", "content": flush_prompt}])
-        facts = res_facts.message.content.strip()
+        
+        # ✅ EXTRACTION SÉCURISÉE (Safe String)
+        facts_content = getattr(res_facts.message, "content", "")
+        facts = facts_content.strip() if isinstance(facts_content, str) else ""
         
         if "aucun" not in facts.lower() and len(facts) > 5:
-            # On sauvegarde les faits dans la mémoire longue (qui est souveraine)
-            with open("memory/MEMORY.md", "a", encoding="utf-8") as f:
-                f.write(f"\n{facts}\n")
-            await memory.sync_memory_md()
-            print("✅ [Context Guard] Faits persistés dans MEMORY.md et indexés.")
+            # ✅ CORRECTION : Écriture dans le BON dossier utilisateur
+            FileRepo.append_fact_to_memory(user_id, facts)
+            
+            # ⚠️ ATTENTION : sync_memory_md doit aussi être adapté (on le fera après dans memory.py)
+            await memory.sync_memory_md(user_id)
+            
+            # 2. NOUVEAU : Sauvegarde Globalisée via MemoryManager !
+            await memory_manager.process_new_facts(user_id, facts)
 
         # 2. Algorithme de compaction (pour le prompt LLM uniquement)
         print("📉 [Context Guard] Création du résumé pour le prompt...")
         compact_prompt = f"Résume cette partie de la conversation en 3 phrases maximum.\n\nHistorique:\n{middle_text}"
         res_compact = await self.admin_client.chat(model=self.admin_model, messages=[{"role": "user", "content": compact_prompt}])
-        summary = res_compact.message.content.strip()
+        
+        # ✅ EXTRACTION SÉCURISÉE (Safe String)
+        summary_content = getattr(res_compact.message, "content", "")
+        summary = summary_content.strip() if isinstance(summary_content, str) else ""
         
         compressed_history = head + [{"role": "system", "content": f"RÉSUMÉ DES ÉCHANGES PRÉCÉDENTS: {summary}"}] + tail
         
         print("✅ [Context Guard] Compaction mémoire terminée.")
         # On retourne la liste compressée pour l'envoyer au LLM
         return compressed_history
-    async def process_multimodal_chat(self, prompt: str, image_b64: str | None,image_path: str|None, session_id: int, stream_callback):
-        print(f"⚙️ AgentRunner: Traitement multimodal pour session {session_id}")
-        
-        # 1. On charge l'historique directement depuis SQLite
-        memory_context = []
+
+    async def _analyze_image(self, prompt: str, image_b64: str) -> str:
+        """Analyse une image via le modèle vision, sans tools. Retourne le texte d'analyse."""
+        messages = [
+            {
+                "role": "system",
+                "content": "Tu es un expert en analyse visuelle. Décris l'image avec précision et exhaustivité. Réponse en texte brut, pas de markdown."
+            },
+            {
+                "role": "user",
+                "content": prompt,
+                "images": [image_b64]
+            }
+        ]
+        response = await self.admin_client.chat(
+            model="openbmb/minicpm-v4.5:8b",
+            messages=messages,
+            stream=False
+        )
+        return response.message.content.strip()
+
+    async def process_multimodal_chat(self, prompt: str, image_b64: str | None, image_path: str|None, session_id: int | None, user_id: str, stream_callback):
+        print(f"⚙️ AgentRunner: Analyse image pour session {session_id}")
+
+        # 1. Analyse visuelle sans tools (le modèle vision ne gère pas bien le function calling)
+        await stream_callback("¶🖼️ Analyse de l'image en cours...")
+        image_analysis = await self._analyze_image(prompt, image_b64 or "")
+        print(f"🖼️ Analyse image terminée ({len(image_analysis)} chars)")
+
+        # 2. Sauvegarder le message utilisateur avec l'image
         if session_id:
-            async with aiosqlite.connect("memory/memoire.db") as db:
-                async with db.execute("SELECT role, content FROM memory_chat WHERE sessionID = ? ORDER BY timestamp ASC LIMIT 20", (session_id,)) as cursor:
-                    lignes = await cursor.fetchall()
-                    for ligne in lignes:
-                        memory_context.append({"role": ligne[0], "content": ligne[1]})
+            await memory_manager.save_message(user_id, session_id, "user", prompt, image_path)
+
+        # 3. Enrichir le prompt avec l'analyse et déléguer à process_chat
+        enriched_prompt = f"{prompt}\n\n[Analyse de l'image jointe]\n{image_analysis}"
+        return await self.process_chat(enriched_prompt, session_id, user_id, stream_callback, is_hidden=True)
+
+    # _recall_web_knowledge a été déplacé dans memory_manager.py
         
-        # 2. Le System Prompt spécifique à la vision
-        system_prompt = {
-            "role": "system",
-            "content": (
-                "Tu es Jean-Heude, un assistant personnel intelligent et capable d'analyser des images.\n"
-            )
-        }
-        
-        # 3. Message utilisateur avec l'image
-        user_message = {"role": "user", "content": prompt}
-        if image_b64:
-            user_message["images"] = [image_b64]
-            print("🖼️ Image B64 injectée avec succès pour Qwen3-VL.")
-
-        full_messages = [system_prompt] + memory_context + [user_message]
-        vision_model = "qwen3-vl:8b" 
-
-        # 4. Récupération des outils pertinents
-        relevant_tools = await tools.get_relevant_tools(prompt, limit=3)
-
-        # 5. On prépare une variable pour stocker la réponse finale de l'assistant
-        assistant_final_text = ""
-
-        async for token in memory.execute_agent_loop(full_messages, vision_model, available_tools=relevant_tools, mute_audio=True):
-            await stream_callback(token)
-            
-            # On attrape les mots au vol, on ignore la pensée (¶) et l'audio
-            clean_chunk = re.sub(r'\|\|AUDIO_ID:.*?\|\|', '', token)
-            if not clean_chunk.startswith("¶"): 
-                assistant_final_text += clean_chunk
-        
-        # 6. Sauvegarde BDD (Utilisateur ET Assistant)
-        if session_id:
-            async with aiosqlite.connect("memory/memoire.db") as db:
-                
-                # Astuce magique : On ajoute la colonne 'image' dans la table si elle n'existe pas !
-                try:
-                    await db.execute("ALTER TABLE memory_chat ADD COLUMN image TEXT")
-                except Exception:
-                    pass # Si ça fait une erreur, c'est que la colonne existe déjà, on ignore.
-                
-                # NOUVEAU : On insère le prompt AVEC le chemin de l'image (image_path)
-                await db.execute(
-                    "INSERT INTO memory_chat (role, content, timestamp, sessionID, image) VALUES (?, ?, datetime('now'), ?, ?)",
-                    ("user", prompt, session_id, image_path)
-                )
-                
-                if assistant_final_text.strip():
-                    # L'assistant n'a pas d'image, donc on met None à la fin
-                    await db.execute(
-                        "INSERT INTO memory_chat (role, content, timestamp, sessionID, image) VALUES (?, ?, datetime('now'), ?, ?)",
-                        ("assistant", assistant_final_text.strip(), session_id, None)
-                    )
-                await db.commit()
-
     @session_guard
-    async def process_chat(self, text_content: str, session_id: int | None, on_token_callback):
-        async with aiosqlite.connect("memory/memoire.db") as db:
-            # 1. Gestion Session
-            if session_id is None:
-                resume = text_content[:30] + "..."
-                cursor = await db.execute(
-                    "INSERT INTO historique_chat (timestamp, resume, userID) VALUES (datetime('now'), ?, ?)",
-                    (resume, "noe_01")
-                )
-                await db.commit()
-                session_id = cursor.lastrowid
-                print(f"🆕 Nouvelle session créée : ID {session_id}")
+    async def process_chat(self, text_content: str, session_id: int | None, user_id: str, on_token_callback, is_hidden: bool = False):
+        # 1. Gestion Session
+        if session_id is None:
+            resume = text_content[:30] + "..."
+            session_id = await memory_manager.create_session(user_id, resume)
+            print(f"🆕 Nouvelle session créée : ID {session_id} pour {user_id}")
 
-            # 2. Sauvegarde INTACTE du message (pour Svelte)
-            await db.execute(
-                "INSERT INTO memory_chat (role, content, timestamp, sessionID) VALUES (?, ?, datetime('now'), ?)",
-                ("user", text_content, session_id)
-            )
-            await db.commit()
+        # 2. Sauvegarde du message utilisateur (sauf si déjà sauvegardé, ex: flux multimodal)
+        if not is_hidden:
+            await memory_manager.save_message(user_id, session_id, "user", text_content)
+        
+        # 3. Préparation du contexte (Optimisation RAM/Parallel)
+        os_context = self._load_os_context(user_id)
+        
+        # Lancement parallèle des recherches de contexte
+        web_context_task = memory_manager.get_web_knowledge_context(text_content)
+        hybrid_context_task = memory_manager.get_hybrid_context(user_id, text_content)
+        
+        web_context, hybrid_context = await asyncio.gather(web_context_task, hybrid_context_task)
+        
+        date_actuelle = datetime.datetime.now().strftime("%A %d %B %Y à %H:%M:%S")
+        
+        # Construction du super-prompt système
+        system_content = (
+            f"{os_context}\n\n"
+        )
+        
+        if hybrid_context:
+            system_content += f"{hybrid_context}\n\n"
             
-            # 3. Récupération de l'historique pour le LLM
-            cursor = await db.execute( 
-                "SELECT role, content FROM memory_chat WHERE sessionID = ? ORDER BY timestamp DESC LIMIT 20",
-                (session_id,)
-            )
-            lignes = await cursor.fetchall()
-            contexte_message = [{"role" : m[0], "content": m[1] } for m in reversed(lignes)]
+        if web_context:
+            system_content += f"{web_context}\n\n"
+        
+        system_content += (
+            f"=== HORLOGE SYSTÈME ACTIVE ===\n"
+            f"Date et Heure actuelles : {date_actuelle}\n"
+            f"RÈGLE ABSOLUE : Tu AS accès à l'heure via ce prompt."
+        )
 
-        # --- 4. DÉCLENCHEMENT DU CONTEXT GUARD (En mémoire uniquement) ---
+        # Récupération de l'historique de conversation (les 20 derniers messages)
+        messages_db = await memory_manager.get_recent_history(session_id, 20)
+        
+        # Assemblage final des messages
+        contexte_message = [{"role": "system", "content": system_content}]
+        contexte_message.extend(messages_db)
+        # En mode is_hidden (ex: multimodal), le message user n'est pas en DB → l'injecter ici
+        if is_hidden:
+            contexte_message.append({"role": "user", "content": text_content})
+        # --- 4. DÉCLENCHEMENT DU CONTEXT GUARD (Compaction si nécessaire) ---
         current_tokens = self.count_tokens(contexte_message)
         if current_tokens > self.max_tokens:
-            # On écrase contexte_message avec la version compressée, MAIS la DB reste intacte !
-            contexte_message = await self._context_window_guard(contexte_message)
+            contexte_message = await self._context_window_guard(contexte_message, user_id)
 
         # 5. Sélection du modèle et Génération
         chosen_model = await memory.decide_model(text_content)
         print(f"🧠 Modèle choisi : {chosen_model}")
 
+
+
         assistant_final_text = ""
         
+        # Lancement de la boucle agentique
         async for chunk in memory.chat_with_memories(contexte_message, chosen_model):
             await on_token_callback(chunk)
             clean_chunk = re.sub(r'\|\|AUDIO_ID:.*?\|\|', '', chunk)
             if not clean_chunk.startswith("¶"): 
                 assistant_final_text += clean_chunk
         
-        # 6. Sauvegarde INTACTE de la réponse (pour Svelte)
+        # 6. Sauvegarde de la réponse dans la DB (pour l'UI)
         if assistant_final_text.strip():
-            async with aiosqlite.connect("memory/memoire.db") as db_final:
-                await db_final.execute(
-                    "INSERT INTO memory_chat (role, content, timestamp, sessionID) VALUES (?, ?, datetime('now'), ?)",
-                    ("assistant", assistant_final_text, session_id)
-                )
-                await db_final.commit()
-                print("✅ Réponse assistant sauvegardée dans l'UI.")
+            await memory_manager.save_message(user_id, session_id, "assistant", assistant_final_text.strip())
+            print("✅ Réponse assistant sauvegardée.")
 
         return {"session_id": session_id, "model": chosen_model}
+    
+

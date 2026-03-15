@@ -8,23 +8,13 @@ services:
     volumes:
       - ./qdrant_storage:/qdrant/storage
 
-  backend:
-    build: ./backend_python
-    restart: always
-    env_file:
-      - ./backend_python/.env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./backend_python/memory:/app/memory
-    depends_on:
-      - qdrant
-      - tts
-      - stt
+  # Le backend tourne directement sur l'hôte (voir start.sh / jean-heude-backend.service)
+  # Cela lui permet d'accéder au système de fichiers et aux processus hôte (skills execute_terminal, etc.)
+
   tts:
-    build: ./backend_python/tts
+    build:
+      context: ./backend_python/tts
+      network: host
     restart: always
     env_file:
       - ./backend_python/.env
@@ -33,7 +23,9 @@ services:
     ports:
       - "8002:8002"
   stt:
-    build: ./backend_python/stt
+    build:
+      context: ./backend_python/stt
+      network: host
     restart: always
     env_file:
       - ./backend_python/.env
@@ -41,12 +33,31 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "8001:8001"
+    volumes:
+      - whisper_cache:/root/.cache/huggingface
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      network: host
+      args:
+        PUBLIC_URL_SERVEUR_PYTHON: http://localhost:8000
     restart: always
     ports:
       - "3004:3000"
-    env_file:
-      - ./frontend/.env
     extra_hosts:
       - "host.docker.internal:host-gateway"
+  neo4j:
+    image: neo4j:5.26.0
+    restart: always
+    ports:
+      - "7474:7474" # Interface Web (Neo4j Browser)
+      - "7687:7687" # Port de communication (Bolt) pour Python
+    environment:
+      - NEO4J_AUTH=neo4j/jeanheude_password # Le login et mot de passe par défaut
+      - NEO4J_PLUGINS=["apoc"] # Outils avancés pour les requêtes complexes
+    volumes:
+      - ./neo4j_data:/data
+      - ./neo4j_logs:/logs
+
+volumes:
+  whisper_cache:

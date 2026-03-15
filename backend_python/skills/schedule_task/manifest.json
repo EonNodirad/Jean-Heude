@@ -1,0 +1,30 @@
+{
+    "name": "schedule_task",
+    "description": "Planifie une tâche récurrente ou différée que tu devras exécuter dans le futur. Utilise cet outil quand l'utilisateur demande d'automatiser une action ou de lui rappeler quelque chose.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "prompt": {
+                "type": "string",
+                "description": "L'instruction exacte que tu devras exécuter (ex: 'Fais un résumé des logs et dis-moi si tout va bien')."
+            },
+            "cron_expression": {
+                "type": "string",
+                "description": "L'expression CRON pour la planification (ex: '0 8 * * *' pour tous les matins à 8h, '*/30 * * * *' pour toutes les 30 min)."
+            },
+            "channel": {
+                "type": "string",
+                "enum": [
+                    "telegram",
+                    "svelte"
+                ],
+                "description": "Le canal sur lequel envoyer le résultat."
+            }
+        },
+        "required": [
+            "prompt",
+            "cron_expression",
+            "channel"
+        ]
+    }
+}

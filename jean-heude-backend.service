@@ -1,0 +1,42 @@
+# Jean-Heude — Service systemd : Backend FastAPI (production)
+#
+# Installation :
+#   1. Remplir les 3 champs marqués <...> ci-dessous
+#   2. sudo cp jean-heude-backend.service /etc/systemd/system/
+#   3. sudo systemctl daemon-reload
+#   4. sudo systemctl enable jean-heude-backend
+#   5. sudo systemctl start jean-heude-backend
+#
+# Logs :
+#   journalctl -u jean-heude-backend -f
+
+[Unit]
+Description=Jean-Heude Backend (FastAPI)
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+
+# --- Remplir ces 3 champs ---
+User=<TON_USER>
+WorkingDirectory=<CHEMIN_ABSOLU>/backend_python
+EnvironmentFile=<CHEMIN_ABSOLU>/backend_python/.env
+# ----------------------------
+
+# Installe les dépendances Python au démarrage si nécessaire
+ExecStartPre=/bin/bash -c '\
+  cd <CHEMIN_ABSOLU>/backend_python && \
+  python3 -m venv .venv && \
+  source .venv/bin/activate && \
+  pip install -r requirements.txt -q'
+
+ExecStart=<CHEMIN_ABSOLU>/backend_python/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

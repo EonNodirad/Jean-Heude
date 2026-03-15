@@ -17,7 +17,7 @@ ruff
 pytest
 pytest-asyncio
 
-
+numpy
 tiktoken
 
 watchfiles
@@ -26,3 +26,10 @@ Pillow
 
 python-telegram-bot
 discord.py
+
+neo4j
+apscheduler
+
+croniter
+PyJWT
+websockets

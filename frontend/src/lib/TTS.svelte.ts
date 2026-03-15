@@ -104,6 +104,7 @@ class AudioQueue {
 		} catch (e) {
 			console.error(`❌ [Error] ${audioId}:`, e);
 			this.isBuffering = false;
+			this.isPlaying = false;
 		}
 	}
 

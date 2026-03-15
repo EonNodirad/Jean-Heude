@@ -1,4 +1,6 @@
-import { env } from '$env/dynamic/public';
+import { PUBLIC_URL_SERVEUR_PYTHON } from '$env/static/public';
+import { get } from 'svelte/store';
+import { authToken } from '$lib/stores';
 
 export const chatState = $state({
 	isConnected: false,
@@ -6,25 +8,33 @@ export const chatState = $state({
 	thinkStream: '', // Flux des pensées
 	contentStream: '', // Flux du texte final
 	sessionId: null as number | null,
+	userId: '', // 🎯 NOUVEAU : On stocke l'identité de l'utilisateur
 	model: '',
 	doneTrigger: 0
 });
 
 let ws: WebSocket | null = null;
 
-export function connectGateway(clientId: string = 'tauri_desktop') {
-	const serverUrl = env.PUBLIC_URL_SERVEUR_PYTHON;
+// On enlève la valeur par défaut "tauri_desktop" pour être sûr d'utiliser le vrai compte
+export function connectGateway(clientId: string) {
+	const serverUrl = PUBLIC_URL_SERVEUR_PYTHON;
 	if (!serverUrl) {
 		console.error("❌ ERREUR : L'URL du serveur Python est introuvable !");
 		return;
 	}
 
+	// 🎯 Sauvegarde du user_id pour les futurs messages
+	chatState.userId = clientId;
+
 	const wsUrl = serverUrl.replace(/^http/, 'ws');
 	console.log('👉 URL finale générée :', wsUrl);
-	ws = new WebSocket(`${wsUrl}/ws/${clientId}`);
+
+	// Le WebSocket se connecte avec l'ID dans l'URL (ex: ws://localhost:8000/ws/noe_01)
+	const token = get(authToken);
+	ws = new WebSocket(`${wsUrl}/ws/${clientId}?token=${token}`);
 
 	ws.onopen = () => {
-		console.log('✅ Connecté à la Gateway Jean-Heude !');
+		console.log(`✅ Connecté à la Gateway Jean-Heude en tant que : ${clientId}`);
 		chatState.isConnected = true;
 	};
 
@@ -78,7 +88,8 @@ export function sendMessage(content: string) {
 		JSON.stringify({
 			type: 'message',
 			content: content,
-			session_id: chatState.sessionId
+			session_id: chatState.sessionId,
+			user_id: chatState.userId // 🎯 LE VOILÀ ! Indispensable pour que FastAPI l'accepte.
 		})
 	);
 }

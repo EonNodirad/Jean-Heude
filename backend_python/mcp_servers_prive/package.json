@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "worldmonitor-mcp": "github:mahimn01/worldmonitor-mcp"
+  }
+}

@@ -1,0 +1,36 @@
+{
+    "name": "add_mcp_server",
+    "description": "Ajoute un serveur MCP existant (ex: un serveur officiel via npx) à la configuration mcp_servers.yaml. Utilise cet outil pour te connecter à de nouveaux services externes (GitHub, Google Drive, PostgreSQL, etc.) sans coder le serveur toi-même.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "server_name": {
+                "type": "string",
+                "description": "Le nom du serveur dans la config (ex: 'github', 'sqlite', 'memory')."
+            },
+            "command": {
+                "type": "string",
+                "description": "La commande à lancer. Sous Windows, utilise TOUJOURS 'npx.cmd' au lieu de 'npx' pour les paquets npm."
+            },
+            "args": {
+                "type": "array",
+                "items": {
+                    "type": "string"
+                },
+                "description": "Les arguments de la commande (ex: ['-y', '@modelcontextprotocol/server-github'])."
+            },
+            "env": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "string"
+                },
+                "description": "Les variables d'environnement requises par le serveur (ex: {'GITHUB_PERSONAL_ACCESS_TOKEN': 'ton_token'} )."
+            }
+        },
+        "required": [
+            "server_name",
+            "command",
+            "args"
+        ]
+    }
+}

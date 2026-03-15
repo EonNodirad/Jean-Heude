@@ -1,0 +1,10 @@
+{
+  "name": "meteo_mcp",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "latest",
+    "axios": "latest"
+  }
+}
