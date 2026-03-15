@@ -12,10 +12,11 @@ ADMIN_MODEL = "llama3.1:8b" # Modèle fixe juste pour le recrutement DRH
 ollama_client = AsyncClient(host=os.getenv("URL_SERVER_OLLAMA"))
 
 class NativeSwarm:
-    def __init__(self, project_name: str, objective: str):
+    def __init__(self, project_name: str, objective: str, user_id: str = "invite"):
         self.project_name = project_name
         self.objective = objective
-        self.workspace = f"memory/projects/{project_name}"
+        self.user_id = user_id
+        self.workspace = f"memory/users/{user_id}/projects/{project_name}"
         self.context_file = f"{self.workspace}/shared_context.md"
         os.makedirs(self.workspace, exist_ok=True)
 
@@ -103,8 +104,8 @@ Renvoie UNIQUEMENT un objet JSON valide :
         print(f"🏁 [Swarm] Projet '{self.project_name}' terminé ! Dossier : {self.workspace}")
 
 # --- Le point d'entrée pour Jean-Heude ---
-async def start_swarm_background(project_name: str, objective: str):
+async def start_swarm_background(project_name: str, objective: str, user_id: str = "invite"):
     """Lance le Swarm sans bloquer le main thread."""
-    swarm = NativeSwarm(project_name, objective)
+    swarm = NativeSwarm(project_name, objective, user_id)
     asyncio.create_task(swarm.launch())
-    return f"✅ C'est lancé. J'ai créé le projet '{project_name}' et l'équipe travaille dessus en arrière-plan. Le résultat sera dans memory/projects/{project_name}."
+    return f"✅ C'est lancé. J'ai créé le projet '{project_name}' et l'équipe travaille dessus en arrière-plan. Le résultat sera dans memory/users/{user_id}/projects/{project_name}."

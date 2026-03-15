@@ -1,6 +1,6 @@
 FROM node:20-slim AS builder
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN npm install -g pnpm@9
 
 WORKDIR /app
 COPY package.json pnpm-lock.yaml .npmrc ./
@@ -14,7 +14,7 @@ RUN echo "PUBLIC_URL_SERVEUR_PYTHON=${PUBLIC_URL_SERVEUR_PYTHON}" > .env.local
 RUN pnpm run build
 
 FROM node:20-slim
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN npm install -g pnpm@9
 COPY --from=builder /app/build ./build
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/node_modules ./node_modules

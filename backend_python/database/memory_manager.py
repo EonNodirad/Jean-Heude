@@ -4,6 +4,7 @@ import os
 import tools
 from database.sqlite_repo import SQLiteRepo
 from database.qdrant_repo import QdrantRepo
+from database.file_repo import FileRepo
 import graph_memory
 
 class MemoryManager:
@@ -160,6 +161,21 @@ class MemoryManager:
                 await self.sqlite.add_long_term_index(facts, v_id)
         except Exception as e:
             print(f"⚠️ Erreur Qdrant/SQLite lors de process_new_facts: {e}")
+
+    def list_user_files(self, user_id: str) -> list[dict]:
+        return FileRepo.list_user_files(user_id)
+
+    def read_user_file(self, user_id: str, rel_path: str) -> str:
+        return FileRepo.read_user_file(user_id, rel_path)
+
+    def write_user_file(self, user_id: str, rel_path: str, content: str):
+        FileRepo.write_user_file(user_id, rel_path, content)
+
+    def create_user_file(self, user_id: str, rel_path: str):
+        FileRepo.create_user_file(user_id, rel_path)
+
+    def delete_user_file(self, user_id: str, rel_path: str):
+        FileRepo.delete_user_file(user_id, rel_path)
 
 # Instance globale (Singleton) pour une utilisation facilitée (Facade partagée)
 memory_manager = MemoryManager()

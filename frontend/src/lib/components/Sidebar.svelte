@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import trois_points from '$lib/assets/trois-points.png';
 	import reglage from '$lib/assets/reglage.png';
 
@@ -20,6 +21,18 @@
 		open?: boolean;
 		onClose?: () => void;
 	}>();
+
+	let popupOuvert = $state(false);
+
+	function togglePopup() {
+		popupOuvert = !popupOuvert;
+	}
+
+	async function allerFichiers() {
+		popupOuvert = false;
+		// eslint-disable-next-line svelte/no-navigation-without-resolve
+		await goto('/files');
+	}
 </script>
 
 <div class="historique-windows" class:open>
@@ -44,7 +57,16 @@
 	</div>
 
 	<div class="bas-historique">
-		<button class="reglage"><img src={reglage} aria-hidden="true" alt="" /></button>
+		<div class="reglage-wrapper">
+			{#if popupOuvert}
+				<div class="reglage-popup">
+					<button class="popup-item" onclick={allerFichiers}>📁 Fichiers</button>
+				</div>
+			{/if}
+			<button class="reglage" onclick={togglePopup}
+				><img src={reglage} aria-hidden="true" alt="" /></button
+			>
+		</div>
 	</div>
 </div>
 
@@ -175,5 +197,38 @@
 		padding: 0 15px;
 		flex-shrink: 0;
 		box-sizing: border-box;
+	}
+
+	.reglage-wrapper {
+		position: relative;
+	}
+
+	.reglage-popup {
+		position: absolute;
+		bottom: calc(100% + 8px);
+		right: 0;
+		background: #1f2937;
+		border: 1px solid #374151;
+		border-radius: 8px;
+		padding: 4px;
+		min-width: 150px;
+		box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+		z-index: 300;
+	}
+
+	.popup-item {
+		all: unset;
+		display: block;
+		width: 100%;
+		padding: 8px 12px;
+		font-size: 0.9rem;
+		color: #f3f4f6;
+		cursor: pointer;
+		border-radius: 6px;
+		box-sizing: border-box;
+	}
+
+	.popup-item:hover {
+		background: #374151;
 	}
 </style>

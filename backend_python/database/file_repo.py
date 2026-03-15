@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 class FileRepo:
     @staticmethod
@@ -55,4 +56,56 @@ class FileRepo:
         user_dir = FileRepo.get_user_dir(user_id)
         with open(f"{user_dir}/system/MEMORY.md", "a", encoding="utf-8") as f:
             f.write(f"\n{fact}\n")
+
+    @staticmethod
+    def _safe_resolve(user_id: str, rel_path: str) -> Path:
+        """Résout un chemin relatif et vérifie qu'il reste dans le dossier de l'utilisateur."""
+        base = Path(f"memory/users/{user_id}").resolve()
+        target = (base / rel_path).resolve()
+        if not str(target).startswith(str(base)):
+            raise PermissionError("Accès refusé : chemin hors de la zone utilisateur")
+        return target
+
+    @staticmethod
+    def list_user_files(user_id: str) -> list[dict]:
+        """Retourne la liste récursive des fichiers/dossiers de l'utilisateur."""
+        base = Path(f"memory/users/{user_id}")
+        if not base.exists():
+            return []
+        result = []
+        for item in sorted(base.rglob("*")):
+            rel = item.relative_to(base)
+            result.append({
+                "path": str(rel),
+                "type": "file" if item.is_file() else "dir",
+            })
+        return result
+
+    @staticmethod
+    def read_user_file(user_id: str, rel_path: str) -> str:
+        target = FileRepo._safe_resolve(user_id, rel_path)
+        if not target.exists() or not target.is_file():
+            raise FileNotFoundError(f"Fichier introuvable : {rel_path}")
+        return target.read_text(encoding="utf-8")
+
+    @staticmethod
+    def write_user_file(user_id: str, rel_path: str, content: str):
+        target = FileRepo._safe_resolve(user_id, rel_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+    @staticmethod
+    def create_user_file(user_id: str, rel_path: str):
+        target = FileRepo._safe_resolve(user_id, rel_path)
+        if target.exists():
+            raise FileExistsError(f"Le fichier existe déjà : {rel_path}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("", encoding="utf-8")
+
+    @staticmethod
+    def delete_user_file(user_id: str, rel_path: str):
+        target = FileRepo._safe_resolve(user_id, rel_path)
+        if not target.exists() or not target.is_file():
+            raise FileNotFoundError(f"Fichier introuvable : {rel_path}")
+        target.unlink()
 

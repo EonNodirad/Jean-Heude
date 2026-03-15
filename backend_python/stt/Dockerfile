@@ -14,12 +14,7 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 3. PRÉ-TÉLÉCHARGEMENT DU MODÈLE 
-# On force Whisper à télécharger le modèle pendant le build de l'image.
-# Comme ça, au lancement du container, c'est instantané.
-RUN python -c "from faster_whisper import WhisperModel; WhisperModel('base', device='cpu', compute_type='int8')"
-
-# 4. Copie du reste du code
+# 3. Copie du reste du code
 COPY . .
 
 # Pas besoin de memory ici (c'est pour le backend), mais on garde si tu as une logique spécifique

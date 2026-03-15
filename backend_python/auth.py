@@ -84,6 +84,7 @@ def setup_new_user_workspace(user_id: str):
     system_path = f"{base_path}/system"
     
     os.makedirs(system_path, exist_ok=True)
+    os.makedirs(f"{base_path}/projects", exist_ok=True)
     
     # 1. USER.md (Profil)
     user_md_path = f"{system_path}/USER.md"

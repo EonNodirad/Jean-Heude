@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import html
@@ -11,6 +12,8 @@ from telegram.constants import ParseMode
 
 from agent_runner import AgentRunner
 from auth import init_auth_db, create_global_account, link_platform_account, get_global_user_id
+
+logger = logging.getLogger("jean_heude.telegram")
 
 # 1. Chargement de l'environnement
 load_dotenv()
@@ -235,9 +238,18 @@ def main():
     app.add_handler(CommandHandler("login", login_command))
     
     app.add_handler(MessageHandler(
-        (filters.TEXT | filters.VOICE | filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND, 
+        (filters.TEXT | filters.VOICE | filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,
         handle_message
     ))
+
+    async def error_handler(update, context: ContextTypes.DEFAULT_TYPE):
+        from telegram.error import NetworkError
+        if isinstance(context.error, NetworkError):
+            logger.warning(f"Telegram NetworkError (connexion perdue) : {context.error}")
+        else:
+            logger.error(f"Telegram erreur : {context.error}", exc_info=context.error)
+
+    app.add_error_handler(error_handler)
 
     print("🤖 Jean-Heude est en ligne sur Telegram ! (Ctrl+C pour arrêter)")
     app.run_polling()

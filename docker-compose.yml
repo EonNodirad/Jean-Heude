@@ -12,7 +12,9 @@ services:
   # Cela lui permet d'accéder au système de fichiers et aux processus hôte (skills execute_terminal, etc.)
 
   tts:
-    build: ./backend_python/tts
+    build:
+      context: ./backend_python/tts
+      network: host
     restart: always
     env_file:
       - ./backend_python/.env
@@ -21,7 +23,9 @@ services:
     ports:
       - "8002:8002"
   stt:
-    build: ./backend_python/stt
+    build:
+      context: ./backend_python/stt
+      network: host
     restart: always
     env_file:
       - ./backend_python/.env
@@ -29,9 +33,12 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "8001:8001"
+    volumes:
+      - whisper_cache:/root/.cache/huggingface
   frontend:
     build:
       context: ./frontend
+      network: host
       args:
         PUBLIC_URL_SERVEUR_PYTHON: http://localhost:8000
     restart: always
@@ -51,3 +58,6 @@ services:
     volumes:
       - ./neo4j_data:/data
       - ./neo4j_logs:/logs
+
+volumes:
+  whisper_cache:

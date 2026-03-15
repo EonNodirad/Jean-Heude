@@ -341,3 +341,55 @@ async def get_tts(audio_id:str):
         return StreamingResponse(chunk_generator(), media_type="application/octet-stream")
     except asyncio.TimeoutError:
         return {"error": "Le TTS est trop lent."}, 504
+
+# ==========================================
+# 📁 ROUTES FICHIERS UTILISATEUR (Sécurisées Multi-Tenant)
+# ==========================================
+
+@app.get("/api/files")
+async def list_files(user_id: str = Depends(get_current_user_dt)):
+    """Liste tous les fichiers et dossiers de l'utilisateur connecté."""
+    return memory_manager.list_user_files(user_id)
+
+@app.get("/api/files/{path:path}")
+async def read_file(path: str, user_id: str = Depends(get_current_user_dt)):
+    """Retourne le contenu d'un fichier de l'utilisateur."""
+    try:
+        content = memory_manager.read_user_file(user_id, path)
+        return {"path": path, "content": content}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Fichier introuvable.")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Accès refusé.")
+
+@app.put("/api/files/{path:path}")
+async def write_file(path: str, body: dict, user_id: str = Depends(get_current_user_dt)):
+    """Met à jour le contenu d'un fichier de l'utilisateur."""
+    content = body.get("content", "")
+    try:
+        memory_manager.write_user_file(user_id, path, content)
+        return {"ok": True}
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Accès refusé.")
+
+@app.post("/api/files/{path:path}")
+async def create_file(path: str, user_id: str = Depends(get_current_user_dt)):
+    """Crée un nouveau fichier vide pour l'utilisateur."""
+    try:
+        memory_manager.create_user_file(user_id, path)
+        return {"ok": True}
+    except FileExistsError:
+        raise HTTPException(status_code=409, detail="Le fichier existe déjà.")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Accès refusé.")
+
+@app.delete("/api/files/{path:path}")
+async def delete_file(path: str, user_id: str = Depends(get_current_user_dt)):
+    """Supprime un fichier de l'utilisateur."""
+    try:
+        memory_manager.delete_user_file(user_id, path)
+        return {"ok": True}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Fichier introuvable.")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Accès refusé.")
