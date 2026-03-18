@@ -5,3 +5,5 @@ stream.md
 tasks.db
 projects/*
 auth.db
+users/*
+system/*
