@@ -1,5 +1,5 @@
 <script>
-	import { currentUser, authToken } from '$lib/stores';
+	import { currentUser, authToken, isAdmin } from '$lib/stores';
 	import { goto } from '$app/navigation';
 	import { PUBLIC_URL_SERVEUR_PYTHON } from '$env/static/public';
 
@@ -24,6 +24,7 @@
 				const data = await res.json();
 				$currentUser = data.user_id;
 				$authToken = data.access_token;
+				$isAdmin = data.is_admin === true;
 				// eslint-disable-next-line svelte/no-navigation-without-resolve
 				await goto('/');
 			} else {
@@ -51,6 +52,7 @@
 				const data = await res.json();
 				$currentUser = data.user_id;
 				$authToken = data.access_token;
+				$isAdmin = data.is_admin === true;
 				// eslint-disable-next-line svelte/no-navigation-without-resolve
 				await goto('/');
 			} else {

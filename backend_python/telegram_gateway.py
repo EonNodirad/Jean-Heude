@@ -11,7 +11,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from telegram.constants import ParseMode
 
 from agent_runner import AgentRunner
-from auth import init_auth_db, create_global_account, link_platform_account, get_global_user_id
+from auth import init_auth_db, get_global_user_id, redeem_link_code
 
 logger = logging.getLogger("jean_heude.telegram")
 
@@ -29,47 +29,39 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text(
         "Salut ! Je suis J.E.A.N-H.E.U.D.E, prêt à t'aider depuis Telegram. 🤖\n\n"
-        "🔒 Pour me parler, tu dois être connecté.\n"
-        "👉 Tape `/register <pseudo> <motdepasse>` pour créer un compte.\n"
-        "👉 Ou `/login <pseudo> <motdepasse>` si tu as déjà un compte global."
+        "🔒 Pour me parler, tu dois lier ton compte.\n"
+        "👉 `/link <code>` — connecte-toi via un code généré sur l'interface web (Menu → Lier compte)."
     )
 
 async def register_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /register désactivée — utiliser /link à la place."""
+    if not update.message:
+        return
+    await update.message.reply_text(
+        "⚠️ La commande `/register` a été désactivée pour des raisons de sécurité.\n\n"
+        "👉 Crée ton compte sur l'interface web, puis utilise `/link <code>` pour lier ce compte Telegram.",
+        parse_mode="Markdown"
+    )
+
+async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lie ce compte Telegram à un compte Jean-Heude via un code OTP généré sur l'interface web."""
     if not update.message or not update.message.chat:
         return
     chat_id = update.message.chat_id
-    if update.message.chat.type != "private":
-        await update.message.reply_text("⚠️ Par mesure de sécurité, crée ton compte en Message Privé !")
-        return
 
     args = context.args or []
-    if len(args) == 2:
-        pseudo, mdp = args[0], args[1]
-        if create_global_account(pseudo, mdp):
-            link_platform_account("telegram", str(chat_id), pseudo, mdp)
-            await update.message.reply_text(f"✅ **Compte {pseudo} créé et lié !** Bonjour Maître.", parse_mode="Markdown")
+    if len(args) == 1:
+        code = args[0].strip()
+        user_id = redeem_link_code(code, "telegram", str(chat_id))
+        if user_id:
+            await update.message.reply_text(f"🔗 **Compte lié avec succès !** Bonjour {user_id} 👋", parse_mode="Markdown")
         else:
-            await update.message.reply_text("❌ **Ce pseudo est déjà pris.**", parse_mode="Markdown")
+            await update.message.reply_text("❌ **Code invalide ou expiré.** Génère un nouveau code sur l'interface web.", parse_mode="Markdown")
     else:
-        await update.message.reply_text("⚠️ Usage correct : `/register <pseudo> <motdepasse>`", parse_mode="Markdown")
-
-async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.chat:
-        return
-    chat_id = update.message.chat_id
-    if update.message.chat.type != "private":
-        await update.message.reply_text("⚠️ Par mesure de sécurité, connecte-toi en Message Privé !")
-        return
-
-    args = context.args or []
-    if len(args) == 2:
-        pseudo, mdp = args[0], args[1]
-        if link_platform_account("telegram", str(chat_id), pseudo, mdp):
-            await update.message.reply_text(f"🔗 **Rebonjour {pseudo} !** Ton compte est maintenant lié à ce Telegram.", parse_mode="Markdown")
-        else:
-            await update.message.reply_text("❌ **Identifiants incorrects.**", parse_mode="Markdown")
-    else:
-        await update.message.reply_text("⚠️ Usage correct : `/login <pseudo> <motdepasse>`", parse_mode="Markdown")
+        await update.message.reply_text(
+            "⚠️ Usage : `/link <code>`\n\nGénère ton code sur l'interface web → Menu → Lier Telegram/Discord.",
+            parse_mode="Markdown"
+        )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -82,7 +74,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 🎯 1. VÉRIFICATION DE L'IDENTITÉ GLOBALE
     global_user_id = get_global_user_id("telegram", str(chat_id))
     if not global_user_id:
-        await update.message.reply_text("🔒 Tu n'es pas connecté. Tape `/login <pseudo> <mdp>` ou `/register <pseudo> <mdp>`.")
+        await update.message.reply_text("🔒 Tu n'es pas connecté. Génère un code sur l'interface web et tape `/link <code>`.")
         return 
         
     await context.bot.send_chat_action(chat_id=chat_id, action='typing')
@@ -123,7 +115,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         else:
                             raise Exception(f"Statut STT: {response.status_code}")
             except Exception as stt_err:
-                print(f"❌ Erreur connexion serveur STT: {stt_err}")
+                logger.error("Erreur connexion serveur STT: %s", stt_err)
                 await update.message.reply_text("Désolé, mon module auditif (Serveur STT) est hors ligne. 🙉")
                 return
             
@@ -216,7 +208,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("🤔 (Réflexion terminée, mais aucune réponse verbale).")
             
     except Exception as e:
-        print(f"❌ Erreur Telegram: {e}")
+        logger.error("Erreur Telegram: %s", e)
         await update.message.reply_text("Oups, mon cerveau a eu un court-circuit. 🧠💥")
         
     finally:
@@ -226,16 +218,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     if not TELEGRAM_TOKEN:
-        print("❌ ERREUR : TELEGRAM_BOT_TOKEN introuvable !")
+        logger.error("TELEGRAM_BOT_TOKEN introuvable !")
         return
 
     init_auth_db() 
-    print("🚀 Démarrage de la Gateway Telegram...")
+    logger.info("Démarrage de la Gateway Telegram...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("register", register_command)) 
-    app.add_handler(CommandHandler("login", login_command))
+    app.add_handler(CommandHandler("register", register_command))
+    app.add_handler(CommandHandler("link", link_command))
     
     app.add_handler(MessageHandler(
         (filters.TEXT | filters.VOICE | filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,
@@ -251,7 +243,7 @@ def main():
 
     app.add_error_handler(error_handler)
 
-    print("🤖 Jean-Heude est en ligne sur Telegram ! (Ctrl+C pour arrêter)")
+    logger.info("Jean-Heude est en ligne sur Telegram ! (Ctrl+C pour arrêter)")
     app.run_polling()
 
 if __name__ == "__main__":

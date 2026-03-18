@@ -1,5 +1,6 @@
 import os
 import re
+import logging
 import discord
 import base64
 import uuid
@@ -7,7 +8,7 @@ import httpx
 from dotenv import load_dotenv
 from pathlib import Path
 from agent_runner import AgentRunner
-from auth import init_auth_db, create_global_account, link_platform_account, get_global_user_id
+from auth import init_auth_db, get_global_user_id, redeem_link_code
 
 # 1. Chargement de l'environnement
 load_dotenv()
@@ -26,7 +27,7 @@ client = discord.Client(intents=intents)
 async def on_ready():
     init_auth_db()
     bot_name = client.user.name if client.user else "Bot"
-    print(f'🤖 Jean-Heude est connecté à Discord en tant que {bot_name} !')
+    logging.getLogger("jean_heude.discord").info("Jean-Heude connecté à Discord en tant que %s", bot_name)
 
 @client.event
 async def on_message(message: discord.Message):
@@ -44,44 +45,28 @@ async def on_message(message: discord.Message):
     # 🔐 GESTION DE L'AUTHENTIFICATION (/register et /login)
     # ==========================================
     if msg_content.startswith('/register'):
-        if not isinstance(message.channel, discord.DMChannel):
-            try:
-                await message.delete()
-            except Exception:
-                pass
-            await message.channel.send("⚠️ Par mesure de sécurité, crée ton compte en Message Privé !")
-            return
-
-        parts = msg_content.split()
-        if len(parts) == 3:
-            pseudo, mdp = parts[1], parts[2]
-            if create_global_account(pseudo, mdp):
-                link_platform_account("discord", discord_user_id_str, pseudo, mdp)
-                await message.channel.send(f"✅ **Compte {pseudo} créé et lié !** Bonjour Maître.")
-            else:
-                await message.channel.send("❌ **Ce pseudo est déjà pris.**")
-        else:
-            await message.channel.send("⚠️ Usage : `/register <pseudo> <motdepasse>`")
+        # Commande désactivée — sécurité : le mdp ne doit jamais transiter par Discord
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        await message.channel.send(
+            "⚠️ La commande `/register` a été désactivée pour des raisons de sécurité.\n"
+            "👉 Crée ton compte sur l'interface web, puis utilise `/link <code>` pour lier ce compte Discord."
+        )
         return
 
-    if msg_content.startswith('/login'):
-        if not isinstance(message.channel, discord.DMChannel):
-            try:
-                await message.delete()
-            except Exception:
-                pass
-            await message.channel.send("⚠️ Par mesure de sécurité, connecte-toi en Message Privé !")
-            return
-
+    if msg_content.startswith('/link'):
         parts = msg_content.split()
-        if len(parts) == 3:
-            pseudo, mdp = parts[1], parts[2]
-            if link_platform_account("discord", discord_user_id_str, pseudo, mdp):
-                await message.channel.send(f"🔗 **Rebonjour {pseudo} !** Ton compte est maintenant lié à ce Discord.")
+        if len(parts) == 2:
+            code = parts[1].strip()
+            user_id_linked = redeem_link_code(code, "discord", discord_user_id_str)
+            if user_id_linked:
+                await message.channel.send(f"🔗 **Compte lié avec succès !** Bonjour {user_id_linked} 👋")
             else:
-                await message.channel.send("❌ **Identifiants incorrects.**")
+                await message.channel.send("❌ **Code invalide ou expiré.** Génère un nouveau code sur l'interface web.")
         else:
-            await message.channel.send("⚠️ Usage : `/login <pseudo> <motdepasse>`")
+            await message.channel.send("⚠️ Usage : `/link <code>`\n\nGénère ton code sur l'interface web → Menu → Lier Telegram/Discord.")
         return
 
     # ==========================================
@@ -152,7 +137,7 @@ async def on_message(message: discord.Message):
                         else:
                             raise Exception(f"Statut STT: {response.status_code}")
             except Exception as stt_err:
-                print(f"❌ Erreur serveur STT: {stt_err}")
+                logging.getLogger("jean_heude.discord").error("Erreur serveur STT: %s", stt_err)
                 await message.channel.send("Désolé, mon module auditif est hors ligne. 🙉")
                 return
             finally:
@@ -216,7 +201,7 @@ async def on_message(message: discord.Message):
                 await message.channel.send("🤔 (Réflexion terminée, mais aucune réponse verbale).")
                 
         except Exception as e:
-            print(f"❌ Erreur Discord: {e}")
+            logging.getLogger("jean_heude.discord").error("Erreur Discord: %s", e)
             await message.channel.send("Oups, mon cerveau a eu un court-circuit. 🧠💥")
             
         finally:
@@ -226,7 +211,7 @@ async def on_message(message: discord.Message):
 
 if __name__ == "__main__":
     if not DISCORD_TOKEN:
-        print("❌ ERREUR : DISCORD_BOT_TOKEN introuvable dans le .env !")
+        logging.getLogger("jean_heude.discord").error("DISCORD_BOT_TOKEN introuvable dans le .env !")
     else:
-        print("🚀 Démarrage de la Gateway Discord...")
+        logging.getLogger("jean_heude.discord").info("Démarrage de la Gateway Discord...")
         client.run(DISCORD_TOKEN)

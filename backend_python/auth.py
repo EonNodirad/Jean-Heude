@@ -28,7 +28,7 @@ if len(_raw_secret) < 32:
 else:
     SECRET_KEY = _raw_secret
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_DAYS = 30
+ACCESS_TOKEN_EXPIRE_DAYS = 7
 
 def create_access_token(data: dict):
     to_encode = data.copy()
@@ -37,12 +37,37 @@ def create_access_token(data: dict):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
+def revoke_token(token: str) -> None:
+    """Ajoute le token à la blacklist jusqu'à son expiry."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        exp = payload.get("exp")
+    except jwt.PyJWTError:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT OR IGNORE INTO revoked_tokens (token, expires_at) VALUES (?, ?)",
+        (token, exp)
+    )
+    conn.commit()
+    conn.close()
+
+def is_token_revoked(token: str) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT 1 FROM revoked_tokens WHERE token = ?", (token,)
+    ).fetchone()
+    conn.close()
+    return row is not None
+
 def decode_access_token(token: str):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
     except jwt.PyJWTError:
         return None
+    if is_token_revoked(token):
+        return None
+    return payload
 
 
 def hash_password(password: str, salt: bytes | None = None) -> tuple[bytes, bytes]:
@@ -63,8 +88,21 @@ def init_auth_db():
     c.execute('''CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
         password_hash BLOB,
-        password_salt BLOB
+        password_salt BLOB,
+        is_admin INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now')),
+        last_active TEXT
     )''')
+    # Migration : ajouter les colonnes manquantes si la table existe déjà
+    for col, definition in [
+        ("is_admin", "INTEGER NOT NULL DEFAULT 0"),
+        ("created_at", "TEXT"),  # SQLite n'accepte pas DEFAULT (datetime('now')) en ALTER TABLE
+        ("last_active", "TEXT"),
+    ]:
+        try:
+            c.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
+        except Exception:
+            pass
     
     # 2. Table des liaisons (Les portes d'entrée vers le compte)
     c.execute('''CREATE TABLE IF NOT EXISTS platform_links (
@@ -74,7 +112,26 @@ def init_auth_db():
         PRIMARY KEY(platform, platform_user_id),
         FOREIGN KEY(user_id) REFERENCES users(user_id)
     )''')
-    
+
+    # 3. Blacklist des tokens révoqués (logout)
+    c.execute('''CREATE TABLE IF NOT EXISTS revoked_tokens (
+        token TEXT PRIMARY KEY,
+        expires_at INTEGER NOT NULL
+    )''')
+
+    # 4. Codes OTP pour lier Discord/Telegram sans envoyer le mot de passe
+    c.execute('''CREATE TABLE IF NOT EXISTS link_codes (
+        code TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(user_id)
+    )''')
+
+    # Nettoyage des entrées expirées au démarrage
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    c.execute("DELETE FROM revoked_tokens WHERE expires_at < ?", (now_ts,))
+    c.execute("DELETE FROM link_codes WHERE expires_at < ?", (now_ts,))
+
     conn.commit()
     conn.close()
 
@@ -126,8 +183,8 @@ def create_global_account(user_id: str, password: str) -> bool:
     conn.commit()
     conn.close()
     
-    # On prépare son espace physique instantanément
     setup_new_user_workspace(user_id)
+    ensure_first_admin(user_id)
     logger.info("Nouveau compte global créé : %s", user_id)
     return True
 
@@ -171,17 +228,104 @@ def get_global_user_id(platform: str, platform_user_id: str) -> str | None:
     # Retourne le vrai pseudo (ex: "noe_01") si le lien existe, sinon None
     return row[0] if row else None
 
-def verify_password(user_id: str, password: str) -> bool:
-    """Vérifie simplement le mot de passe pour la connexion Web."""
+def generate_link_code(user_id: str) -> str:
+    """Génère un code OTP à 6 chiffres pour lier Discord/Telegram sans mot de passe."""
+    import random
+    code = f"{random.randint(0, 999999):06d}"
+    expires_at = int((datetime.now(timezone.utc) + timedelta(minutes=10)).timestamp())
+    conn = sqlite3.connect(DB_PATH)
+    # Un seul code actif par utilisateur
+    conn.execute("DELETE FROM link_codes WHERE user_id = ?", (user_id,))
+    conn.execute(
+        "INSERT INTO link_codes (code, user_id, expires_at) VALUES (?, ?, ?)",
+        (code, user_id, expires_at)
+    )
+    conn.commit()
+    conn.close()
+    logger.info("Code de liaison généré pour : %s", user_id)
+    return code
+
+def redeem_link_code(code: str, platform: str, platform_user_id: str) -> str | None:
+    """Échange un code OTP contre un lien plateforme. Retourne le user_id si succès."""
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT user_id, expires_at FROM link_codes WHERE code = ?", (code,)
+    ).fetchone()
+    if not row or row[1] < now_ts:
+        conn.close()
+        return None
+    user_id = row[0]
+    conn.execute(
+        "INSERT OR REPLACE INTO platform_links (platform, platform_user_id, user_id) VALUES (?, ?, ?)",
+        (platform, str(platform_user_id), user_id)
+    )
+    conn.execute("DELETE FROM link_codes WHERE code = ?", (code,))
+    conn.commit()
+    conn.close()
+    logger.info("Code OTP utilisé : %s (%s) → %s", platform, platform_user_id, user_id)
+    return user_id
+
+def verify_password(user_id: str, password: str) -> dict | None:
+    """Vérifie le mot de passe. Retourne les infos du compte ou None si échec."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT password_hash, password_salt FROM users WHERE user_id=?", (user_id,))
+    c.execute("SELECT password_hash, password_salt, is_admin FROM users WHERE user_id=?", (user_id,))
     row = c.fetchone()
-    conn.close()
-    
     if not row:
-        return False
-        
-    stored_hash, salt = row
+        conn.close()
+        return None
+    stored_hash, salt, is_admin = row
     attempt_hash, _ = hash_password(password, salt)
-    return attempt_hash == stored_hash
+    if attempt_hash != stored_hash:
+        conn.close()
+        return None
+    # Mise à jour de last_active
+    c.execute("UPDATE users SET last_active = datetime('now') WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+    return {"user_id": user_id, "is_admin": bool(is_admin)}
+
+def set_admin(user_id: str, is_admin: bool) -> bool:
+    """Passe un compte en admin (ou retire le rôle)."""
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute("UPDATE users SET is_admin = ? WHERE user_id = ?", (int(is_admin), user_id)).rowcount
+    conn.commit()
+    conn.close()
+    return rows > 0
+
+def ban_user(user_id: str) -> bool:
+    """Désactive un compte (is_admin=-1 signale le ban)."""
+    conn = sqlite3.connect(DB_PATH)
+    rows = conn.execute("UPDATE users SET is_admin = -1 WHERE user_id = ?", (user_id,)).rowcount
+    conn.commit()
+    conn.close()
+    return rows > 0
+
+def delete_user(user_id: str) -> bool:
+    """Supprime un compte et ses liaisons plateformes."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM platform_links WHERE user_id = ?", (user_id,))
+    rows = conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,)).rowcount
+    conn.commit()
+    conn.close()
+    return rows > 0
+
+def list_users() -> list[dict]:
+    """Retourne tous les comptes pour le dashboard admin."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT user_id, is_admin, created_at, last_active FROM users ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def ensure_first_admin(user_id: str) -> None:
+    """Passe le compte en admin si c'est le premier utilisateur créé."""
+    conn = sqlite3.connect(DB_PATH)
+    count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    conn.close()
+    if count == 1:
+        set_admin(user_id, True)
+        logger.info("Premier compte — admin attribué automatiquement : %s", user_id)

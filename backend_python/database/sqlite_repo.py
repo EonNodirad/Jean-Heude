@@ -16,11 +16,81 @@ class SQLiteRepo:
                     chunk_text TEXT,
                     vector_id TEXT
                 )""")
-            try:
-                await db.execute("ALTER TABLE memory_chat ADD COLUMN image TEXT")
-            except Exception:
-                pass
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT DEFAULT (datetime('now')),
+                    user_id TEXT,
+                    model TEXT,
+                    tokens_in INTEGER DEFAULT 0,
+                    tokens_out INTEGER DEFAULT 0,
+                    latency_ms INTEGER DEFAULT 0,
+                    tool_name TEXT,
+                    event_type TEXT,
+                    error TEXT
+                )""")
+            # Migrations colonnes legacy
+            for col, definition in [("image", "TEXT")]:
+                try:
+                    await db.execute(f"ALTER TABLE memory_chat ADD COLUMN {col} {definition}")
+                except Exception:
+                    pass
             await db.commit()
+
+    async def log_metric(self, user_id: str, model: str = "", tokens_in: int = 0,
+                         tokens_out: int = 0, latency_ms: int = 0,
+                         tool_name: str = "", event_type: str = "inference", error: str = ""):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO metrics (user_id, model, tokens_in, tokens_out, latency_ms, tool_name, event_type, error)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (user_id, model, tokens_in, tokens_out, latency_ms, tool_name or None, event_type, error or None)
+            )
+            await db.commit()
+
+    async def get_metrics_summary(self, hours: int = 24) -> dict:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            since = f"datetime('now', '-{hours} hours')"
+            async with db.execute(f"""
+                SELECT
+                    COUNT(*) as total_requests,
+                    SUM(tokens_in + tokens_out) as total_tokens,
+                    AVG(latency_ms) as avg_latency_ms,
+                    SUM(CASE WHEN error IS NOT NULL AND error != '' THEN 1 ELSE 0 END) as error_count,
+                    model,
+                    COUNT(*) as model_count
+                FROM metrics
+                WHERE timestamp >= {since} AND event_type = 'inference'
+                GROUP BY model
+                ORDER BY model_count DESC
+            """) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(r) for r in rows]
+
+    async def get_all_sessions(self, limit: int = 100) -> list:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """SELECT h.id, h.userID, h.resume, h.timestamp,
+                          COUNT(m.id) as message_count
+                   FROM historique_chat h
+                   LEFT JOIN memory_chat m ON m.sessionID = h.id
+                   GROUP BY h.id
+                   ORDER BY h.timestamp DESC
+                   LIMIT ?""",
+                (limit,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(r) for r in rows]
+
+    async def get_active_sessions_count(self) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT COUNT(DISTINCT userID) FROM historique_chat WHERE timestamp >= datetime('now', '-1 hour')"
+            ) as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else 0
 
     async def get_history_list(self, user_id: str):
         async with aiosqlite.connect(self.db_path) as db:

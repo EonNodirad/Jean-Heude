@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import uuid
 import os
 import tools
@@ -6,6 +7,8 @@ from database.sqlite_repo import SQLiteRepo
 from database.qdrant_repo import QdrantRepo
 from database.file_repo import FileRepo
 import graph_memory
+
+logger = logging.getLogger("jean_heude.memory")
 
 class MemoryManager:
     """
@@ -52,7 +55,7 @@ class MemoryManager:
             try:
                 return await self.qdrant.search_memories("jean_heude_memories", vector, user_id, limit)
             except Exception as e:
-                print(f"⚠️ Erreur Qdrant dans get_hybrid_context: {e}")
+                logger.warning("Erreur Qdrant dans get_hybrid_context: %s", e)
                 return []
 
         async def fetch_s() -> list:
@@ -62,14 +65,14 @@ class MemoryManager:
                 k_results = await self.sqlite.search_keyword_memory(keywords)
                 return k_results
             except Exception as e:
-                print(f"⚠️ Erreur SQLite dans get_hybrid_context: {e}")
+                logger.warning("Erreur SQLite dans get_hybrid_context: %s", e)
                 return []
 
         async def fetch_g() -> str:
             try:
                 return await self.graph.search_graph(prompt, user_id)
             except Exception as e:
-                print(f"⚠️ Erreur Neo4j dans get_hybrid_context: {e}")
+                logger.warning("Erreur Neo4j dans get_hybrid_context: %s", e)
                 return ""
 
         # Gather results
@@ -129,22 +132,22 @@ class MemoryManager:
                 return f"--- SAVOIR RÉCENT (WEB CACHE) ---\n{web_context}\n\n"
             return ""
         except Exception as e:
-            print(f"⚠️ Erreur rappel connaissance web: {e}")
+            logger.warning("Erreur rappel connaissance web: %s", e)
             return ""
 
     async def process_new_facts(self, user_id: str, facts: str):
         """Sauvegarde les faits compressés dans Qdrant (Sémantique), SQLite (Index Long Terme) et Neo4j (Graphe)"""
         if not facts.strip():
             return
-            
-        print("💾 [MemoryManager] Sauvegarde des nouveaux faits dans les bases long terme...")
-        
+
+        logger.info("[MemoryManager] Sauvegarde des nouveaux faits dans les bases long terme...")
+
         # 1. Insertion Neo4j (Graphe ontologique)
         try:
             donnees_graphe = await graph_memory.extract_ontology(facts)
             await self.graph.insert_graph_data(donnees_graphe, user_id)
         except Exception as e:
-            print(f"⚠️ Erreur extraction Neo4j lors de process_new_facts: {e}")
+            logger.warning("Erreur extraction Neo4j lors de process_new_facts: %s", e)
 
         # 2. Vectorisation et insertion (Qdrant + SQLite Index)
         try:
@@ -160,7 +163,7 @@ class MemoryManager:
                 )
                 await self.sqlite.add_long_term_index(facts, v_id)
         except Exception as e:
-            print(f"⚠️ Erreur Qdrant/SQLite lors de process_new_facts: {e}")
+            logger.warning("Erreur Qdrant/SQLite lors de process_new_facts: %s", e)
 
     def list_user_files(self, user_id: str) -> list[dict]:
         return FileRepo.list_user_files(user_id)

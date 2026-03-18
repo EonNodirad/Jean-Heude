@@ -24,7 +24,6 @@ TTS_SERVER_URL = os.environ.get("TTS_SERVER_URL", "http://localhost:5002/api/tts
 http_client = httpx.AsyncClient(timeout=20.0)
 orchestrator = Orchestrator()
 client = AsyncClient(host=remote_host)
-model = "phi3:mini"
 
 audio_store = {}
 memory_lock = asyncio.Lock()
