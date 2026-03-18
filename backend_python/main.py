@@ -1,6 +1,8 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException, Depends, Header, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+import re as _re
+from urllib.parse import urlparse
 from fastapi.responses import StreamingResponse
 from PIL import Image
 from fastapi.staticfiles import StaticFiles
@@ -13,7 +15,7 @@ import memory_IA as memory
 import asyncio
 import logging
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 from database.memory_manager import memory_manager
@@ -29,6 +31,43 @@ logging.basicConfig(
 )
 logger = logging.getLogger("jean_heude")
 
+# --- Buffer circulaire pour les logs admin ---
+class _DequeHandler(logging.Handler):
+    def __init__(self, maxlen: int = 500):
+        super().__init__()
+        self.records: deque[dict] = deque(maxlen=maxlen)
+        self._subscribers: list[asyncio.Queue] = []
+
+    def emit(self, record: logging.LogRecord):
+        import datetime as _dt
+        entry = {
+            "time": _dt.datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S"),
+            "level": record.levelname,
+            "name": record.name,
+            "message": record.getMessage(),
+        }
+        self.records.append(entry)
+        for q in list(self._subscribers):
+            try:
+                q.put_nowait(entry)
+            except Exception:
+                pass
+
+    def subscribe(self) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue()
+        self._subscribers.append(q)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue):
+        try:
+            self._subscribers.remove(q)
+        except ValueError:
+            pass
+
+_log_handler = _DequeHandler(maxlen=500)
+_log_handler.setLevel(logging.DEBUG)
+logging.getLogger().addHandler(_log_handler)
+
 # --- Rate limiting ---
 _login_attempts: dict[str, list[float]] = defaultdict(list)
 _RATE_WINDOW = 60   # secondes
@@ -42,7 +81,11 @@ def _check_rate_limit(ip: str):
     _login_attempts[ip].append(now)
 
 # ✅ IMPORT DE L'AUTHENTIFICATION
-from auth import init_auth_db, create_global_account, verify_password, create_access_token, decode_access_token  # noqa: E402
+from auth import (  # noqa: E402
+    init_auth_db, create_global_account, verify_password,
+    create_access_token, decode_access_token, revoke_token,
+    generate_link_code, set_admin, ban_user, delete_user, list_users,
+)
 
 async def get_current_user_dt(authorization: str = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
@@ -57,6 +100,8 @@ load_dotenv()
 STT_SERVER_URL = os.getenv("STT_SERVER_URL", "")
 _raw_origins = os.getenv("FRONTEND_URL", "")
 ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()] or ["*"]
+# allow_credentials=True est incompatible avec ["*"] (spec CORS) — on désactive dans ce cas
+_CORS_CREDENTIALS = ALLOWED_ORIGINS != ["*"]
 
 async def watch_tools_changes():
     logger.info("[Auto-Watch] Surveillance JIT (Skills & MCP) activée.")
@@ -133,7 +178,7 @@ app.mount("/api/uploads", StaticFiles(directory="memory/uploads"), name="uploads
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_credentials=_CORS_CREDENTIALS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -145,24 +190,156 @@ class AuthRequest(BaseModel):
     user_id: str
     password: str
 
+    @field_validator("user_id")
+    @classmethod
+    def validate_user_id(cls, v: str) -> str:
+        if not _re.match(r'^[a-zA-Z0-9_-]{3,50}$', v):
+            raise ValueError("user_id invalide : 3-50 caractères alphanumériques, _ ou - autorisés.")
+        return v
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        if len(v) < 6:
+            raise ValueError("Mot de passe trop court (minimum 6 caractères).")
+        if len(v) > 256:
+            raise ValueError("Mot de passe trop long.")
+        return v
+
 @app.post("/api/register")
 async def register_user(req: AuthRequest, request: Request):
     _check_rate_limit(request.client.host if request.client else "unknown")
     success = create_global_account(req.user_id, req.password)
     if success:
-        token = create_access_token({"user_id": req.user_id})
-        return {"status": "success", "message": "Compte créé.", "access_token": token, "user_id": req.user_id}
+        account = verify_password(req.user_id, req.password) or {}
+        token = create_access_token({"user_id": req.user_id, "is_admin": account.get("is_admin", False)})
+        return {"status": "success", "message": "Compte créé.", "access_token": token, "user_id": req.user_id, "is_admin": account.get("is_admin", False)}
     else:
         raise HTTPException(status_code=400, detail="Ce pseudo est déjà pris.")
 
 @app.post("/api/login")
 async def login_user(req: AuthRequest, request: Request):
     _check_rate_limit(request.client.host if request.client else "unknown")
-    if verify_password(req.user_id, req.password):
-        token = create_access_token({"user_id": req.user_id})
-        return {"status": "success", "user_id": req.user_id, "access_token": token}
+    account = verify_password(req.user_id, req.password)
+    if account:
+        if account.get("is_admin") == -1:
+            raise HTTPException(status_code=403, detail="Compte désactivé.")
+        token = create_access_token({"user_id": req.user_id, "is_admin": account.get("is_admin", False)})
+        return {"status": "success", "user_id": req.user_id, "access_token": token, "is_admin": account.get("is_admin", False)}
     else:
         raise HTTPException(status_code=401, detail="Identifiants incorrects.")
+
+@app.post("/api/logout")
+async def logout_user(authorization: str = Header(None)):
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ")[1]
+        revoke_token(token)
+    return {"status": "success"}
+
+@app.post("/api/generate-link-code")
+async def generate_link_code_endpoint(user_id: str = Depends(get_current_user_dt)):
+    """Génère un code OTP à 6 chiffres (TTL 10 min) pour lier Discord/Telegram."""
+    code = generate_link_code(user_id)
+    return {"code": code, "expires_in_seconds": 600}
+
+# ==========================================
+# 🛡️ ADMIN — Dépendance de rôle
+# ==========================================
+async def get_admin_user(authorization: str = Header(None)) -> str:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Token manquant.")
+    token = authorization.split(" ")[1]
+    payload = decode_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Token invalide ou expiré.")
+    if not payload.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Accès réservé aux administrateurs.")
+    return payload["user_id"]
+
+# ==========================================
+# 🛡️ ADMIN — Routes
+# ==========================================
+@app.get("/api/admin/users")
+async def admin_list_users(_admin: str = Depends(get_admin_user)):
+    return list_users()
+
+@app.post("/api/admin/users/{target_id}/ban")
+async def admin_ban_user(target_id: str, _admin: str = Depends(get_admin_user)):
+    if not ban_user(target_id):
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable.")
+    return {"ok": True}
+
+@app.post("/api/admin/users/{target_id}/set-admin")
+async def admin_set_admin(target_id: str, body: dict, _admin: str = Depends(get_admin_user)):
+    set_admin(target_id, bool(body.get("is_admin", False)))
+    return {"ok": True}
+
+@app.delete("/api/admin/users/{target_id}")
+async def admin_delete_user(target_id: str, admin: str = Depends(get_admin_user)):
+    if target_id == admin:
+        raise HTTPException(status_code=400, detail="Impossible de supprimer son propre compte.")
+    if not delete_user(target_id):
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable.")
+    return {"ok": True}
+
+@app.get("/api/models")
+async def list_models(_user: str = Depends(get_current_user_dt)):
+    """Liste les modèles Ollama disponibles sur le serveur."""
+    models_list = await memory.orchestrator.get_local_models()
+    return {"models": models_list}
+
+@app.get("/api/admin/stats")
+async def admin_stats(hours: int = 24, _admin: str = Depends(get_admin_user)):
+    metrics = await memory_manager.sqlite.get_metrics_summary(hours)
+    active_sessions = await memory_manager.sqlite.get_active_sessions_count()
+    return {"metrics_by_model": metrics, "active_sessions_last_hour": active_sessions, "window_hours": hours}
+
+@app.get("/api/admin/health")
+async def admin_health(_admin: str = Depends(get_admin_user)):
+    return await health_check()
+
+@app.get("/api/admin/sessions")
+async def admin_sessions(limit: int = 100, _admin: str = Depends(get_admin_user)):
+    rows = await memory_manager.sqlite.get_all_sessions(limit)
+    return rows
+
+@app.post("/api/admin/broadcast")
+async def admin_broadcast(body: dict, _admin: str = Depends(get_admin_user)):
+    message = body.get("message", "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Message vide.")
+    await gateway.broadcast_system_message(message)
+    return {"ok": True, "sent_to": len(gateway.active_connections)}
+
+@app.get("/api/admin/logs")
+async def admin_logs(limit: int = 100, level: str = "", _admin: str = Depends(get_admin_user)):
+    entries = list(_log_handler.records)
+    if level:
+        entries = [e for e in entries if e["level"] == level.upper()]
+    return entries[-limit:]
+
+@app.websocket("/ws/admin/logs")
+async def admin_logs_ws(websocket: WebSocket, token: str = Query(None)):
+    if not token:
+        await websocket.close(code=1008)
+        return
+    payload = decode_access_token(token)
+    if not payload or not payload.get("is_admin"):
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    q = _log_handler.subscribe()
+    try:
+        while True:
+            try:
+                entry = await asyncio.wait_for(q.get(), timeout=20)
+                await websocket.send_json(entry)
+            except asyncio.TimeoutError:
+                await websocket.send_json({"ping": True})
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
+        _log_handler.unsubscribe(q)
 
 # ==========================================
 # 🔌 WEBSOCKET
@@ -215,6 +392,8 @@ async def voice_endpoint(
     user_id: str = Depends(get_current_user_dt) # 🎯 REQUIS !
 ):
     audio_binary = await file.read()
+    if len(audio_binary) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Fichier audio trop volumineux (max 10 MB).")
     text_transcribed = ""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -270,8 +449,10 @@ async def multimodal_endpoint(
     prompt: str = Form(...),
     image: UploadFile | None = File(None),
     session_id: str | None = Form(None),
-    user_id: str = Depends(get_current_user_dt) # 🎯 REQUIS !
+    user_id: str = Depends(get_current_user_dt)
 ):
+    if len(prompt) > 16000:
+        raise HTTPException(status_code=400, detail="Prompt trop long (max 16 000 caractères).")
     real_session_id = int(session_id) if session_id and session_id not in ('null', 'undefined') else None
     
     if not real_session_id:
@@ -282,6 +463,8 @@ async def multimodal_endpoint(
     image_path_db = None
     if image:
         contents = await image.read()
+        if len(contents) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Image trop volumineuse (max 10 MB).")
         image_b64 = base64.b64encode(contents).decode('utf-8')
         try:
             img_pil = Image.open(io.BytesIO(contents))
@@ -345,6 +528,68 @@ async def get_tts(audio_id:str):
 # ==========================================
 # 📁 ROUTES FICHIERS UTILISATEUR (Sécurisées Multi-Tenant)
 # ==========================================
+
+# ==========================================
+# 🩺 HEALTH CHECK
+# ==========================================
+def _base_url(url: str) -> str:
+    """Extrait scheme://host:port d'une URL complète."""
+    p = urlparse(url)
+    return f"{p.scheme}://{p.netloc}"
+
+async def _ping(url: str, any_response_ok: bool = False) -> str:
+    """Tente un GET sur url.
+    - any_response_ok=True : toute réponse HTTP = service up (pour les services sans /health)
+    - any_response_ok=False : seulement 200 = ok
+    """
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as c:
+            r = await c.get(url)
+            if any_response_ok or r.status_code == 200:
+                return "ok"
+            return f"degraded ({r.status_code})"
+    except Exception:
+        return "unreachable"
+
+@app.get("/health")
+async def health_check():
+    """Vérifie l'état de chaque dépendance."""
+    status: dict = {}
+
+    # Ollama
+    status["ollama"] = await _ping(memory.remote_host)
+
+    # Qdrant — URL_QDRANT peut être "localhost" ou "http://localhost:6333"
+    raw_qdrant = os.getenv("URL_QDRANT", "http://localhost:6333")
+    if not raw_qdrant.startswith("http"):
+        raw_qdrant = f"http://{raw_qdrant}:6333"
+    status["qdrant"] = await _ping(f"{raw_qdrant}/healthz")
+
+    # TTS — pas de /health, on ping la racine (tout retour HTTP = service up)
+    tts_url = os.getenv("TTS_SERVER_URL", "")
+    if tts_url:
+        status["tts"] = await _ping(_base_url(tts_url), any_response_ok=True)
+    else:
+        status["tts"] = "not_configured"
+
+    # STT — idem
+    if STT_SERVER_URL:
+        status["stt"] = await _ping(_base_url(STT_SERVER_URL), any_response_ok=True)
+    else:
+        status["stt"] = "not_configured"
+
+    # Neo4j — browser HTTP sur port 7474
+    neo4j_uri = os.getenv("NEO4J_URI", "")
+    if neo4j_uri:
+        # bolt://host:7687 → http://host:7474
+        parsed = urlparse(neo4j_uri)
+        neo4j_http = f"http://{parsed.hostname}:7474"
+        status["neo4j"] = await _ping(neo4j_http, any_response_ok=True)
+    else:
+        status["neo4j"] = "not_configured"
+
+    overall = "ok" if all(v == "ok" for v in status.values()) else "degraded"
+    return {"status": overall, "services": status}
 
 @app.get("/api/files")
 async def list_files(user_id: str = Depends(get_current_user_dt)):

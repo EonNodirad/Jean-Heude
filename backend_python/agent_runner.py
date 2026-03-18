@@ -2,29 +2,32 @@ import memory_IA as memory
 import re
 import os
 import datetime
+import time
 import tiktoken
 import asyncio
+import logging
 from ollama import AsyncClient
 from functools import wraps
 from database.file_repo import FileRepo
 from database.memory_manager import memory_manager
+from config import AGENT_MAX_TOKENS, AGENT_ADMIN_MODEL, AGENT_VISION_MODEL
+
+logger = logging.getLogger("jean_heude.agent")
 
 def session_guard(func):
     """Garantit que chaque agent dispose d'un espace de travail isolé."""
     @wraps(func)
     async def wrapper(self, *args, **kwargs):
         session_id = args[1] if len(args) > 1 else kwargs.get('session_id')
-        print(f"🛡️ [Session Guard] Isolation de la session {session_id or 'Nouvelle'}")
+        logger.debug("[Session Guard] Isolation de la session %s", session_id or "Nouvelle")
         return await func(self, *args, **kwargs)
     return wrapper
 class AgentRunner:
     def __init__(self):
         self.encoder = tiktoken.get_encoding("cl100k_base")
-        self.max_tokens = 5000  # Limite avant compaction du prompt
-        
-        # Client LLM dédié aux tâches administratives (résumé et extraction)
+        self.max_tokens = AGENT_MAX_TOKENS
         self.admin_client = AsyncClient(host=os.getenv("URL_SERVER_OLLAMA"))
-        self.admin_model = "llama3.1:8b" 
+        self.admin_model = AGENT_ADMIN_MODEL
         
     def _load_os_context(self, user_id: str) -> str:
         return FileRepo.load_os_context(user_id)
@@ -38,7 +41,7 @@ class AgentRunner:
         Génère un prompt compressé (Head + Résumé + Tail) À LA VOLÉE.
         Ne modifie AUCUNE base de données pour préserver l'UI.
         """
-        print("🧹 [Context Guard] Fenêtre pleine. Compaction en mémoire...")
+        logger.info("[Context Guard] Fenêtre pleine. Compaction en mémoire...")
         
         if len(history) <= 4:
             return history
@@ -50,7 +53,7 @@ class AgentRunner:
         middle_text = "\n".join([f"{m['role']}: {m['content']}" for m in middle])
         
         # 1. Extraction des faits (Pre-Compaction Memory Flush)
-        print("💾 [Context Guard] Extraction des faits vers le long terme...")
+        logger.info("[Context Guard] Extraction des faits vers le long terme...")
         flush_prompt = (
             f"Analyse cet historique et liste uniquement les faits nouveaux et importants "
             f"concernant l'utilisateur. Sois très concis, sous forme de tirets. "
@@ -73,7 +76,7 @@ class AgentRunner:
             await memory_manager.process_new_facts(user_id, facts)
 
         # 2. Algorithme de compaction (pour le prompt LLM uniquement)
-        print("📉 [Context Guard] Création du résumé pour le prompt...")
+        logger.info("[Context Guard] Création du résumé pour le prompt...")
         compact_prompt = f"Résume cette partie de la conversation en 3 phrases maximum.\n\nHistorique:\n{middle_text}"
         res_compact = await self.admin_client.chat(model=self.admin_model, messages=[{"role": "user", "content": compact_prompt}])
         
@@ -83,7 +86,7 @@ class AgentRunner:
         
         compressed_history = head + [{"role": "system", "content": f"RÉSUMÉ DES ÉCHANGES PRÉCÉDENTS: {summary}"}] + tail
         
-        print("✅ [Context Guard] Compaction mémoire terminée.")
+        logger.info("[Context Guard] Compaction mémoire terminée.")
         # On retourne la liste compressée pour l'envoyer au LLM
         return compressed_history
 
@@ -101,19 +104,19 @@ class AgentRunner:
             }
         ]
         response = await self.admin_client.chat(
-            model="openbmb/minicpm-v4.5:8b",
+            model=AGENT_VISION_MODEL,
             messages=messages,
             stream=False
         )
         return response.message.content.strip()
 
     async def process_multimodal_chat(self, prompt: str, image_b64: str | None, image_path: str|None, session_id: int | None, user_id: str, stream_callback):
-        print(f"⚙️ AgentRunner: Analyse image pour session {session_id}")
+        logger.info("AgentRunner: Analyse image pour session %s", session_id)
 
         # 1. Analyse visuelle sans tools (le modèle vision ne gère pas bien le function calling)
         await stream_callback("¶🖼️ Analyse de l'image en cours...")
         image_analysis = await self._analyze_image(prompt, image_b64 or "")
-        print(f"🖼️ Analyse image terminée ({len(image_analysis)} chars)")
+        logger.info("Analyse image terminée (%d chars)", len(image_analysis))
 
         # 2. Sauvegarder le message utilisateur avec l'image
         if session_id:
@@ -126,12 +129,12 @@ class AgentRunner:
     # _recall_web_knowledge a été déplacé dans memory_manager.py
         
     @session_guard
-    async def process_chat(self, text_content: str, session_id: int | None, user_id: str, on_token_callback, is_hidden: bool = False):
+    async def process_chat(self, text_content: str, session_id: int | None, user_id: str, on_token_callback, is_hidden: bool = False, tool_callback=None):
         # 1. Gestion Session
         if session_id is None:
             resume = text_content[:30] + "..."
             session_id = await memory_manager.create_session(user_id, resume)
-            print(f"🆕 Nouvelle session créée : ID {session_id} pour {user_id}")
+            logger.info("Nouvelle session créée : ID %s pour %s", session_id, user_id)
 
         # 2. Sauvegarde du message utilisateur (sauf si déjà sauvegardé, ex: flux multimodal)
         if not is_hidden:
@@ -181,23 +184,39 @@ class AgentRunner:
 
         # 5. Sélection du modèle et Génération
         chosen_model = await memory.decide_model(text_content)
-        print(f"🧠 Modèle choisi : {chosen_model}")
-
-
+        logger.info("Modèle choisi : %s", chosen_model)
 
         assistant_final_text = ""
-        
-        # Lancement de la boucle agentique
-        async for chunk in memory.chat_with_memories(contexte_message, chosen_model):
-            await on_token_callback(chunk)
-            clean_chunk = re.sub(r'\|\|AUDIO_ID:.*?\|\|', '', chunk)
-            if not clean_chunk.startswith("¶"): 
-                assistant_final_text += clean_chunk
-        
+        tokens_in = self.count_tokens(contexte_message)
+        t_start = time.monotonic()
+
+        try:
+            # Lancement de la boucle agentique
+            async for chunk in memory.chat_with_memories(contexte_message, chosen_model, user_id=user_id, tool_callback=tool_callback):
+                await on_token_callback(chunk)
+                clean_chunk = re.sub(r'\|\|AUDIO_ID:.*?\|\|', '', chunk)
+                if not clean_chunk.startswith("¶"):
+                    assistant_final_text += clean_chunk
+
+            latency_ms = int((time.monotonic() - t_start) * 1000)
+            tokens_out = len(self.encoder.encode(assistant_final_text))
+
+            # Enregistrement de la métrique
+            await memory_manager.sqlite.log_metric(
+                user_id=user_id, model=chosen_model,
+                tokens_in=tokens_in, tokens_out=tokens_out,
+                latency_ms=latency_ms, event_type="inference"
+            )
+        except Exception as e:
+            await memory_manager.sqlite.log_metric(
+                user_id=user_id, model=chosen_model, event_type="inference", error=str(e)
+            )
+            raise
+
         # 6. Sauvegarde de la réponse dans la DB (pour l'UI)
         if assistant_final_text.strip():
             await memory_manager.save_message(user_id, session_id, "assistant", assistant_final_text.strip())
-            print("✅ Réponse assistant sauvegardée.")
+            logger.debug("Réponse assistant sauvegardée.")
 
         return {"session_id": session_id, "model": chosen_model}
     

@@ -24,7 +24,6 @@ TTS_SERVER_URL = os.environ.get("TTS_SERVER_URL", "http://localhost:5002/api/tts
 http_client = httpx.AsyncClient(timeout=20.0)
 orchestrator = Orchestrator()
 client = AsyncClient(host=remote_host)
-model = "phi3:mini"
 
 audio_store = {}
 memory_lock = asyncio.Lock()
@@ -142,7 +141,44 @@ async def pre_generate_audio(audio_id, text):
 
 # ----------------- Helper Functions supprimées (Déléguées à MemoryManager) ----------
 
-async def chat_with_memories(history: list, chosen_model: str, user_id: str = "default_user") -> AsyncGenerator[str,Any]:
+# Schémas des outils côté client (exécutés par le CLI jh)
+CLIENT_TOOLS = [
+    {"type": "function", "function": {
+        "name": "client_read_file",
+        "description": "Lit le contenu d'un fichier sur la machine de l'utilisateur.",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Chemin du fichier (relatif au répertoire de travail)"}}, "required": ["path"]},
+    }},
+    {"type": "function", "function": {
+        "name": "client_write_file",
+        "description": "Crée ou écrase un fichier sur la machine de l'utilisateur.",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]},
+    }},
+    {"type": "function", "function": {
+        "name": "client_edit_file",
+        "description": "Remplace une chaîne exacte dans un fichier existant sur la machine de l'utilisateur.",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_str": {"type": "string", "description": "Chaîne exacte à remplacer (doit être unique dans le fichier)"}, "new_str": {"type": "string", "description": "Chaîne de remplacement"}}, "required": ["path", "old_str", "new_str"]},
+    }},
+    {"type": "function", "function": {
+        "name": "client_glob_files",
+        "description": "Liste les fichiers correspondant à un pattern glob sur la machine de l'utilisateur.",
+        "parameters": {"type": "object", "properties": {"pattern": {"type": "string", "description": "Pattern glob (ex: **/*.py)"}, "dir": {"type": "string", "description": "Répertoire de recherche (optionnel, défaut: répertoire courant)"}}, "required": ["pattern"]},
+    }},
+    {"type": "function", "function": {
+        "name": "client_grep_files",
+        "description": "Recherche un pattern regex dans les fichiers sur la machine de l'utilisateur.",
+        "parameters": {"type": "object", "properties": {"pattern": {"type": "string", "description": "Pattern regex à chercher"}, "path": {"type": "string", "description": "Fichier ou dossier (optionnel)"}, "glob": {"type": "string", "description": "Filtre de fichiers (ex: *.py)"}}, "required": ["pattern"]},
+    }},
+    {"type": "function", "function": {
+        "name": "client_run_bash",
+        "description": "Exécute une commande shell sur la machine de l'utilisateur et retourne la sortie.",
+        "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "Commande shell à exécuter"}, "timeout_ms": {"type": "integer", "description": "Timeout en millisecondes (défaut: 30000)"}}, "required": ["command"]},
+    }},
+]
+
+CLIENT_TOOL_NAMES = {t["function"]["name"] for t in CLIENT_TOOLS}
+
+
+async def chat_with_memories(history: list, chosen_model: str, user_id: str = "default_user", tool_callback=None) -> AsyncGenerator[str,Any]:
     
     last_user_message = next((m['content'] for m in reversed(history) if m['role'] == 'user'), "")
     print(f"🔍 Recherche mémoire hybride et outils pour : {last_user_message}")
@@ -169,13 +205,17 @@ async def chat_with_memories(history: list, chosen_model: str, user_id: str = "d
     assistant_final_text = ""
 
 
-    async for chunk in execute_agent_loop(messages, chosen_model, available_tools, user_id=user_id):
+    # Ajouter les outils client si un tool_callback est fourni
+    if tool_callback is not None:
+        available_tools = list(available_tools) + CLIENT_TOOLS
+
+    async for chunk in execute_agent_loop(messages, chosen_model, available_tools, user_id=user_id, tool_callback=tool_callback):
         if not chunk.startswith("¶") and not chunk.startswith("||AUDIO_ID:"):
             assistant_final_text += chunk
         yield chunk
 
 
-async def execute_agent_loop(messages: list, chosen_model: str, available_tools: list, mute_audio: bool = False, user_id: str = "invite") -> AsyncGenerator[str, Any]:
+async def execute_agent_loop(messages: list, chosen_model: str, available_tools: list, mute_audio: bool = False, user_id: str = "invite", tool_callback=None) -> AsyncGenerator[str, Any]:
     assistant_full_response = ""
     buffer_audio = ""
     is_in_hidden_thought = False
@@ -260,14 +300,18 @@ async def execute_agent_loop(messages: list, chosen_model: str, available_tools:
                 status_text = f"Utilisation de l'outil : {call.function.name}..."
                 yield f"\n\n*{status_text}*\n\n"
                 yield "\n"
-                
+
                 if not mute_audio and not is_in_hidden_thought:
                     status_audio_id, _ = prepare_audio_slot()
                     text_clean = clean_text_for_tts(status_text)
                     asyncio.create_task(pre_generate_audio(status_audio_id, text_clean))
                     yield f"||AUDIO_ID:{status_audio_id}||"
 
-                result = await tools.call_tool_execution(call.function.name, call.function.arguments, user_id)
+                # Outils côté client : déléguer au CLI via tool_callback
+                if call.function.name in CLIENT_TOOL_NAMES and tool_callback is not None:
+                    result = await tool_callback(call.function.name, call.function.arguments)
+                else:
+                    result = await tools.call_tool_execution(call.function.name, call.function.arguments, user_id)
 
                 messages.append({
                     'role': 'tool',

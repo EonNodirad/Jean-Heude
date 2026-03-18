@@ -1,4 +1,5 @@
 node_modules
+jh-ts/dist/
 
 .venv/
 
@@ -30,6 +31,7 @@ Thumbs.db
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
+
 # Memory
 
 **/memoire.db
@@ -46,5 +48,6 @@ neo4j_logs/
 
 # Analyse IA
 analys_jean_heude.md
+ROADMAP.md
 .claude
 CLAUDE.md

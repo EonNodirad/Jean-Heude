@@ -6,6 +6,7 @@ import uuid
 import datetime
 import asyncio
 import logging
+import time
 import yaml
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models
@@ -340,12 +341,14 @@ async def call_tool_execution(tool_name: str, arguments: dict, user_id: str = "i
         )
         
         logger.info("[MCP] Exécution de %s sur le serveur %s...", real_tool_name, server_name)
+        _t0 = time.monotonic()
         try:
             async with asyncio.timeout(MCP_TOOL_TIMEOUT):
                 async with stdio_client(server_params) as (read, write):
                     async with ClientSession(read, write) as session:
                         await session.initialize()
                         result = await session.call_tool(real_tool_name, arguments)
+                        _latency = int((time.monotonic() - _t0) * 1000)
 
                         if result.content:
                             texte_resultat = ""
@@ -386,12 +389,34 @@ async def call_tool_execution(tool_name: str, arguments: dict, user_id: str = "i
                                     except Exception as mem_err:
                                         logger.warning("Erreur lors de la mémorisation automatique : %s", mem_err)
 
+                            # Log métrique MCP
+                            try:
+                                from database.sqlite_repo import SQLiteRepo as _SR
+                                _sr = _SR("memory/memoire.db")
+                                await _sr.log_metric(user_id=user_id, event_type="mcp_tool", tool_name=tool_name, latency_ms=_latency)
+                            except Exception:
+                                pass
+
                             return texte_resultat
 
                         return "✅ Outil MCP exécuté avec succès (pas de retour texte)."
         except asyncio.TimeoutError:
+            try:
+                from database.sqlite_repo import SQLiteRepo as _SR
+                _sr = _SR("memory/memoire.db")
+                await _sr.log_metric(user_id=user_id, event_type="mcp_tool", tool_name=tool_name,
+                                     latency_ms=int((time.monotonic() - _t0) * 1000), error="timeout")
+            except Exception:
+                pass
             return f"❌ Timeout ({MCP_TOOL_TIMEOUT}s) lors de l'exécution de '{real_tool_name}'."
         except Exception as e:
+            try:
+                from database.sqlite_repo import SQLiteRepo as _SR
+                _sr = _SR("memory/memoire.db")
+                await _sr.log_metric(user_id=user_id, event_type="mcp_tool", tool_name=tool_name,
+                                     latency_ms=int((time.monotonic() - _t0) * 1000), error=str(e))
+            except Exception:
+                pass
             return f"❌ Erreur d'exécution MCP : {e}"
 
     # 🏠 ROUTE 2 : C'est un Skill local !
@@ -408,23 +433,39 @@ async def call_tool_execution(tool_name: str, arguments: dict, user_id: str = "i
                     script_path = os.path.join(folder_path, "main.py")
                     if not os.path.exists(script_path):
                         return f"Erreur: Le script main.py est manquant dans {skill_folder}."
+                    _t0 = time.monotonic()
                     try:
                         spec = importlib.util.spec_from_file_location(tool_name, script_path)
-                        # Le garde-fou pour Pyright :
                         if spec is None or spec.loader is None:
                             return f"Erreur: Impossible d'initialiser le module {tool_name}."
-                            
+
                         module = importlib.util.module_from_spec(spec)
                         spec.loader.exec_module(module)
-                        # 🪄 INJECTION MAGIQUE DU USER_ID POUR LES OUTILS LOCAUX
                         if hasattr(module, "run"):
                             sig = inspect.signature(module.run)
-                            # Si le développeur a mis "user_id" dans les paramètres de son outil, on lui donne !
                             if "user_id" in sig.parameters:
                                 arguments["user_id"] = user_id
-                                
-                        return await module.run(**arguments)
+
+                        result = await module.run(**arguments)
+                        try:
+                            from database.sqlite_repo import SQLiteRepo as _SR
+                            _sr = _SR("memory/memoire.db")
+                            await _sr.log_metric(user_id=user_id, event_type="skill",
+                                                 tool_name=tool_name,
+                                                 latency_ms=int((time.monotonic() - _t0) * 1000))
+                        except Exception:
+                            pass
+                        return result
                     except Exception as e:
+                        try:
+                            from database.sqlite_repo import SQLiteRepo as _SR
+                            _sr = _SR("memory/memoire.db")
+                            await _sr.log_metric(user_id=user_id, event_type="skill",
+                                                 tool_name=tool_name,
+                                                 latency_ms=int((time.monotonic() - _t0) * 1000),
+                                                 error=str(e))
+                        except Exception:
+                            pass
                         return f"Erreur lors de l'exécution du skill {tool_name}: {str(e)}"
         
         return f"Erreur: Outil '{tool_name}' inconnu."

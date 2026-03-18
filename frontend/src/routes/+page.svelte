@@ -47,7 +47,6 @@
 	onMount(async () => {
 		// 🔒 REDIRECTION SI NON CONNECTÉ
 		if (!$currentUser || !$authToken) {
-			// eslint-disable-next-line svelte/no-navigation-without-resolve
 			await goto('/login');
 			return;
 		}
