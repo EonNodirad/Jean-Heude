@@ -129,7 +129,7 @@ class AgentRunner:
     # _recall_web_knowledge a été déplacé dans memory_manager.py
         
     @session_guard
-    async def process_chat(self, text_content: str, session_id: int | None, user_id: str, on_token_callback, is_hidden: bool = False):
+    async def process_chat(self, text_content: str, session_id: int | None, user_id: str, on_token_callback, is_hidden: bool = False, tool_callback=None):
         # 1. Gestion Session
         if session_id is None:
             resume = text_content[:30] + "..."
@@ -192,7 +192,7 @@ class AgentRunner:
 
         try:
             # Lancement de la boucle agentique
-            async for chunk in memory.chat_with_memories(contexte_message, chosen_model):
+            async for chunk in memory.chat_with_memories(contexte_message, chosen_model, user_id=user_id, tool_callback=tool_callback):
                 await on_token_callback(chunk)
                 clean_chunk = re.sub(r'\|\|AUDIO_ID:.*?\|\|', '', chunk)
                 if not clean_chunk.startswith("¶"):

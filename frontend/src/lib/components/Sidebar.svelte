@@ -17,12 +17,14 @@
 					method: 'POST',
 					headers: { Authorization: `Bearer ${token}` }
 				});
-			} catch { /* silencieux */ }
+			} catch {
+				/* silencieux */
+			}
 		}
 		$currentUser = null;
 		$authToken = null;
 		$isAdmin = false;
-		await goto('/login');
+		void goto('/login');
 	}
 
 	interface Historique {
@@ -81,13 +83,13 @@
 
 	async function allerFichiers() {
 		popupOuvert = false;
-		// eslint-disable-next-line svelte/no-navigation-without-resolve
+
 		await goto('/files');
 	}
 
 	async function allerAdmin() {
 		popupOuvert = false;
-		// eslint-disable-next-line svelte/no-navigation-without-resolve
+
 		await goto('/admin');
 	}
 </script>
@@ -120,7 +122,9 @@
 					<button class="popup-item" onclick={allerFichiers}>📁 Fichiers</button>
 					<button class="popup-item" onclick={ouvrirModalLien}>🔗 Lier Telegram / Discord</button>
 					{#if $isAdmin}
-						<button class="popup-item popup-item--admin" onclick={allerAdmin}>🛡️ Dashboard Admin</button>
+						<button class="popup-item popup-item--admin" onclick={allerAdmin}
+							>🛡️ Dashboard Admin</button
+						>
 					{/if}
 					<hr class="popup-divider" />
 					<button class="popup-item popup-item--logout" onclick={logout}>⏻ Déconnexion</button>
@@ -374,7 +378,9 @@
 		color: #6b7280;
 		font-size: 1rem;
 	}
-	.modal-close:hover { color: #f3f4f6; }
+	.modal-close:hover {
+		color: #f3f4f6;
+	}
 	.modal-titre {
 		margin: 0;
 		font-size: 1.1rem;
@@ -408,8 +414,13 @@
 		text-align: center;
 		transition: opacity 0.15s;
 	}
-	.modal-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-	.modal-btn:not(:disabled):hover { opacity: 0.85; }
+	.modal-btn:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+	.modal-btn:not(:disabled):hover {
+		opacity: 0.85;
+	}
 	.code-box {
 		background: #0f172a;
 		border: 1px solid rgba(231, 100, 79, 0.3);

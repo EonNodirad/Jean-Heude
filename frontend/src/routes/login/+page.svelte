@@ -25,7 +25,7 @@
 				$currentUser = data.user_id;
 				$authToken = data.access_token;
 				$isAdmin = data.is_admin === true;
-				// eslint-disable-next-line svelte/no-navigation-without-resolve
+
 				await goto('/');
 			} else {
 				const data = await res.json();
@@ -53,7 +53,7 @@
 				$currentUser = data.user_id;
 				$authToken = data.access_token;
 				$isAdmin = data.is_admin === true;
-				// eslint-disable-next-line svelte/no-navigation-without-resolve
+
 				await goto('/');
 			} else {
 				const data = await res.json();

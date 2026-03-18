@@ -3,6 +3,7 @@ import asyncio
 import aiosqlite
 import datetime
 import httpx
+import uuid
 from fastapi import WebSocket
 from croniter import croniter
 from dotenv import load_dotenv
@@ -25,7 +26,11 @@ class Gateway:
         self.lanes: dict[str, asyncio.Queue] = {}
         # Dictionnaire pour garder une trace des workers (tâches de fond)
         self.workers: dict[str, asyncio.Task] = {}
-        
+        # Capacités déclarées par chaque client (ex: {"client_tools"})
+        self.client_capabilities: dict[str, set] = {}
+        # Futures en attente de tool_result, indexées par call_id
+        self.pending_tool_calls: dict[str, asyncio.Future] = {}
+
         # 💓 NOUVEAU : Lancement du Heartbeat Universel dès la création de la Gateway !
         self.heartbeat_task = asyncio.create_task(self._universal_heartbeat())
         logger.info("[Gateway] Heartbeat Universel démarré en arrière-plan.")
@@ -48,6 +53,12 @@ class Gateway:
             del self.lanes[client_id]
         if client_id in self.active_connections:
             del self.active_connections[client_id]
+        self.client_capabilities.pop(client_id, None)
+        # Annuler les tool_calls en attente pour ce client
+        for call_id in list(self.pending_tool_calls.keys()):
+            fut = self.pending_tool_calls.pop(call_id)
+            if not fut.done():
+                fut.cancel()
         logger.info("Lane fermée pour : %s", client_id)
 
     async def broadcast_system_message(self, message: str):
@@ -62,8 +73,52 @@ class Gateway:
         for client_id in dead:
             self.disconnect(client_id)
 
+    def has_capability(self, client_id: str, capability: str) -> bool:
+        return capability in self.client_capabilities.get(client_id, set())
+
+    async def send_tool_call_to_client(self, client_id: str, call_id: str, name: str, args: dict) -> dict:
+        """Envoie un tool_call au CLI et attend le tool_result. Timeout 60s."""
+        websocket = self.active_connections.get(client_id)
+        if not websocket:
+            raise RuntimeError(f"Client {client_id} déconnecté")
+        loop = asyncio.get_event_loop()
+        fut: asyncio.Future = loop.create_future()
+        self.pending_tool_calls[call_id] = fut
+        try:
+            await websocket.send_json({
+                "type": "tool_call",
+                "call_id": call_id,
+                "name": name,
+                "args": args,
+            })
+            result = await asyncio.wait_for(asyncio.shield(fut), timeout=60.0)
+            return result
+        except asyncio.TimeoutError:
+            self.pending_tool_calls.pop(call_id, None)
+            raise RuntimeError(f"Timeout : le client n'a pas répondu à l'outil {name}")
+        except Exception:
+            self.pending_tool_calls.pop(call_id, None)
+            raise
+
     async def handle_event(self, client_id: str, data: dict):
-        """On ne traite plus directement, on empile dans la Lane."""
+        """Traite les messages entrants : tool_result directement, le reste dans la lane."""
+        # tool_result : résoudre la Future correspondante sans passer par la lane
+        if data.get("type") == "tool_result":
+            call_id = data.get("call_id", "")
+            fut = self.pending_tool_calls.pop(call_id, None)
+            if fut and not fut.done():
+                fut.set_result({
+                    "content": data.get("content"),
+                    "error": data.get("error"),
+                })
+            return
+
+        # Stocker les capacités déclarées dès le premier message
+        if data.get("type") == "message":
+            caps = data.get("capabilities", [])
+            if caps:
+                self.client_capabilities[client_id] = set(caps)
+
         if client_id in self.lanes:
             await self.lanes[client_id].put(data)
 
@@ -86,8 +141,18 @@ class Gateway:
                     async def on_token(token):
                         await websocket.send_json({"type": "token", "content": token})
 
+                    # Tool callback pour les outils côté client (jh CLI)
+                    tool_callback = None
+                    if self.has_capability(client_id, "client_tools"):
+                        async def tool_callback(name: str, args: dict) -> str:
+                            call_id = str(uuid.uuid4())
+                            result = await self.send_tool_call_to_client(client_id, call_id, name, args)
+                            if result.get("error"):
+                                return f"[Erreur outil] {result['error']}"
+                            return result.get("content") or ""
+
                     # 🎯 Appel de l'Agent Runner
-                    result = await self.agent_runner.process_chat(content, session_id, user_id, on_token)
+                    result = await self.agent_runner.process_chat(content, session_id, user_id, on_token, tool_callback=tool_callback)
 
                     # Signal de fin
                     await websocket.send_json({

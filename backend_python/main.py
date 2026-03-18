@@ -15,7 +15,7 @@ import memory_IA as memory
 import asyncio
 import logging
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 from database.memory_manager import memory_manager
@@ -32,8 +32,6 @@ logging.basicConfig(
 logger = logging.getLogger("jean_heude")
 
 # --- Buffer circulaire pour les logs admin ---
-from collections import deque
-
 class _DequeHandler(logging.Handler):
     def __init__(self, maxlen: int = 500):
         super().__init__()
@@ -283,6 +281,12 @@ async def admin_delete_user(target_id: str, admin: str = Depends(get_admin_user)
     if not delete_user(target_id):
         raise HTTPException(status_code=404, detail="Utilisateur introuvable.")
     return {"ok": True}
+
+@app.get("/api/models")
+async def list_models(_user: str = Depends(get_current_user_dt)):
+    """Liste les modèles Ollama disponibles sur le serveur."""
+    models_list = await memory.orchestrator.get_local_models()
+    return {"models": models_list}
 
 @app.get("/api/admin/stats")
 async def admin_stats(hours: int = 24, _admin: str = Depends(get_admin_user)):

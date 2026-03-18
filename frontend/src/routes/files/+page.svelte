@@ -28,7 +28,6 @@
 				headers: { Authorization: getToken() }
 			});
 			if (res.status === 401) {
-				// eslint-disable-next-line svelte/no-navigation-without-resolve
 				await goto('/login');
 				return;
 			}
