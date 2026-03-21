@@ -3,7 +3,7 @@
  * Jean-Heude orchestre, le CLI exécute.
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { readFile, writeFile } from 'fs/promises';
+import { readFile, writeFile, readdir } from 'fs/promises';
 import { dirname, resolve, isAbsolute } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
@@ -104,6 +104,20 @@ export async function globFiles(pattern: string, dir?: string): Promise<ToolResu
   }
 }
 
+// ── list_directory ─────────────────────────────────────────────────────────
+
+export async function listDirectory(dir?: string): Promise<ToolResult> {
+  try {
+    const target = dir ? resolvePath(dir) : workingDir;
+    const entries = await readdir(target, { withFileTypes: true });
+    if (entries.length === 0) return { output: '(répertoire vide)', error: null };
+    const lines = entries.map(e => `${e.isDirectory() ? 'd' : 'f'} ${e.name}`);
+    return { output: lines.join('\n'), error: null };
+  } catch (e) {
+    return { output: null, error: String(e) };
+  }
+}
+
 // ── grep_files ─────────────────────────────────────────────────────────────
 
 export async function grepFiles(pattern: string, path?: string, globPattern?: string): Promise<ToolResult> {
@@ -158,6 +172,7 @@ export type ToolName =
   | 'client_edit_file'
   | 'client_glob_files'
   | 'client_grep_files'
+  | 'client_list_directory'
   | 'client_run_bash';
 
 export const DESTRUCTIVE_TOOLS: ToolName[] = [
@@ -186,6 +201,8 @@ export async function execute(name: string, args: Record<string, unknown>): Prom
         args.path as string | undefined,
         args.glob as string | undefined,
       );
+    case 'client_list_directory':
+      return listDirectory(args.dir as string | undefined);
     case 'client_run_bash':
       return runBash(args.command as string, args.timeout_ms as number | undefined);
     default:

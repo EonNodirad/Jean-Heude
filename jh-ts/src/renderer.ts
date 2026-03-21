@@ -17,11 +17,24 @@ export function printToken(chunk: string): void {
 // ── Markdown ──────────────────────────────────────────────────────────────
 
 export function renderMarkdown(text: string): void {
-  // Remonter au début du bloc de réponse pour le remplacer
-  const lines = text.split('\n').length;
-  process.stdout.write(`\x1b[${lines}A\x1b[J`);
   const rendered = marked(text) as string;
-  process.stdout.write(rendered);
+  process.stdout.write('\n' + rendered);
+}
+
+// ── Diff visuel ───────────────────────────────────────────────────────────
+
+export function printDiff(oldStr: string, newStr: string): void {
+  const oldLines = oldStr.split('\n');
+  const newLines = newStr.split('\n');
+
+  console.log(chalk.dim('  ┌─ diff ──────────────────────────────────────────'));
+  for (const line of oldLines) {
+    console.log(chalk.red(`  - ${line}`));
+  }
+  for (const line of newLines) {
+    console.log(chalk.green(`  + ${line}`));
+  }
+  console.log(chalk.dim('  └─────────────────────────────────────────────────'));
 }
 
 // ── Tool calls ────────────────────────────────────────────────────────────
@@ -111,16 +124,130 @@ export function printWorkingDir(dir: string): void {
   console.log(chalk.dim(`📁 ${dir}`));
 }
 
-// ── Bannière ──────────────────────────────────────────────────────────────
+// ── Avatar + Bannière ─────────────────────────────────────────────────────
 
 export function printBanner(userId: string, server: string, model: string = ''): void {
+  const b     = chalk.cyan;
+  const hat   = chalk.white.bold;
+  const eyec  = chalk.hex('#FF8C00').bold;
+  const must  = chalk.hex('#8B4513').bold;
+  const ant   = chalk.yellow;
+  const rv    = chalk.dim;
+  const brand = chalk.hex('#e7644f').bold;
+
+  const avatar = [
+    `     ${ant('●')}               ${ant('≋≋')}`,
+    `     ${ant('│')}    ${hat('._______.')}   ${ant('≋')}`,
+    `     ${ant('│')}   ${hat('/ ⚙   ♦  \\')}  ${ant('≋')}`,
+    `     ${ant('│')}  ${hat('(___________)')}`,
+    `    ${hat('(___________________)')}`,
+    `    ${b('(')} ${rv('·  ·  ·  ·  ·  ·  ·')} ${b(')')}`,
+    `   ${b('(')}  ${rv('·')}  ${b('.----------.')}  ${rv('·')}  ${b(')')}`,
+    `  ${b('(')}  ${rv('·')}  ${b('|')} ${eyec('.--------.')} ${b('|')}  ${rv('·')}  ${b(')')}`,
+    `  ${b('(')}  ${rv('·')}  ${b('|')}${eyec('(((  O  )))')}${b('|')}  ${rv('·')}  ${b(')')}`,
+    `  ${b('(')}  ${rv('·')}  ${b('|')} ${eyec("'--------'")} ${b('|')}  ${rv('·')}  ${b(')')}`,
+    `   ${b('(')}  ${rv('·')}  ${b("'----------'")}  ${rv('·')}  ${b(')')}`,
+    `    ${b('(')} ${rv('·  ·  ·  ·  ·  ·  ·')} ${b(')')}`,
+    `     ${b('(___________________)')}`,
+    `        ${must('~~~~~~~~~~~~~~~~')}`,
+    `     ${must('~~~~\\')}            ${must('/~~~~')}`,
+    `   ${must('~~~~~~~')}              ${must('~~~~~~~')}`,
+    ` ${must('~~~~~~~~~~')}              ${must('~~~~~~~~~~')}`,
+  ];
+
+  for (const line of avatar) {
+    process.stdout.write(line + '\n');
+  }
+
+  process.stdout.write('\n');
   process.stdout.write(
-    chalk.hex('#e7644f').bold('J.E.A.N-H.E.U.D.E') +
-    chalk.dim(` — ${userId} @ ${server}`) +
-    (model ? chalk.dim.cyan(`  (${model})`) : '') +
-    '\n',
+    '  ' + brand('J.E.A.N-H.E.U.D.E') +
+    chalk.dim(`  ${userId} @ ${server}`) +
+    (model ? chalk.dim.cyan(`  (${model})`) : '') + '\n',
   );
-  process.stdout.write(chalk.dim('Tape ') + chalk.dim.bold('/help') + chalk.dim(' pour les commandes, Ctrl+D pour quitter.\n\n'));
+  process.stdout.write(
+    chalk.dim('  Tape ') + chalk.dim.bold('/help') +
+    chalk.dim(' · Ctrl+C interrompt · Ctrl+D quitte\n\n'),
+  );
+}
+
+// ── Spinner d'attente ─────────────────────────────────────────────────────
+
+const THINKING_MSGS = [
+  'je réfléchis…',
+  'laisse-moi le temps…',
+  'un instant…',
+  'je cogite…',
+  'je cherche…',
+  'patience…',
+  'analyse en cours…',
+  'je traite ça…',
+  'hm, voyons…',
+  'c\'est complexe…',
+  'je consulte ma mémoire…',
+  'mes neurones chauffent…',
+  'presque…',
+  'quelques secondes encore…',
+  'laisse-moi assembler ça…',
+  'traitement en profondeur…',
+];
+
+/**
+ * Affiche des phrases d'attente rotatives toutes les 4-5s.
+ * Retourne une fonction stop() qui efface la ligne.
+ */
+export function startThinkingSpinner(): () => void {
+  if (!process.stdout.isTTY) return () => {};
+
+  let idx = Math.floor(Math.random() * THINKING_MSGS.length);
+  let stopped = false;
+
+  const write = () => {
+    if (stopped) return;
+    const msg = THINKING_MSGS[idx % THINKING_MSGS.length];
+    idx++;
+    process.stdout.write('\r\x1b[2K' + chalk.dim.italic(`  ${msg}`));
+  };
+
+  write();
+  const interval = setInterval(() => {
+    if (stopped) return;
+    write();
+  }, 4000 + Math.floor(Math.random() * 1000));
+
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(interval);
+    process.stdout.write('\r\x1b[2K');
+  };
+}
+
+// ── Barre d'input ─────────────────────────────────────────────────────────
+
+export function printInputHints(pendingImage: string | null = null): void {
+  const cols = Math.min(process.stdout.columns || 80, 100);
+  const img  = pendingImage ? chalk.yellow(` 🖼 ${pendingImage}`) : '';
+  const left = [
+    chalk.dim('Ctrl+R') + chalk.dim.italic(' parler'),
+    chalk.dim('/attach') + chalk.dim.italic(' <img>'),
+    chalk.dim('/help'),
+  ].join(chalk.dim('  ·  '));
+  const inner = left + img;
+  // Largeur visible (sans ANSI) pour la bordure
+  const visLen = stripAnsi(inner).length;
+  const fill = Math.max(0, cols - 4 - visLen);
+  process.stdout.write(
+    chalk.dim('  ╭' + '─'.repeat(cols - 4) + '╮\n') +
+    chalk.dim('  │ ') + inner + ' '.repeat(fill) + chalk.dim(' │\n') +
+    chalk.dim('  ╰' + '─'.repeat(cols - 4) + '╯\n'),
+  );
+}
+
+/** Retire les séquences ANSI d'une chaîne pour mesurer la longueur visible. */
+function stripAnsi(str: string): string {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1b\[[0-9;]*[mGKHF]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
 }
 
 // ── Table des sessions ────────────────────────────────────────────────────
@@ -149,6 +276,9 @@ ${chalk.hex('#e7644f').bold('Slash commands :')}
   ${chalk.bold('/export')}              Exporter la session en Markdown
   ${chalk.bold('/permissions [mode]')}  Mode : ask | auto | plan (actuel: ${chalk.cyan(mode)})
   ${chalk.bold('/cwd [chemin]')}        Voir/changer le répertoire de travail
+  ${chalk.bold('/voice')}               Enregistrer un message vocal (transcription STT)
+  ${chalk.bold('/attach <chemin>')}     Joindre une image au prochain message
+  ${chalk.bold('/detach')}              Annuler l'image en attente
   ${chalk.bold('/help')}                Cette aide
   ${chalk.bold('/quit')} | ${chalk.bold('/exit')}        Quitter
 `);

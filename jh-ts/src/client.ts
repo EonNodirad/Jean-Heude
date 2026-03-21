@@ -17,6 +17,7 @@ export class JHClient extends EventEmitter {
   config: JHConfig;
   readonly creds: Credentials;
   private ws: WebSocket | null = null;
+  private _requestInFlight = false;
   lastSessionId: number | null = null;
   lastModel: string = '';
 
@@ -56,10 +57,12 @@ export class JHClient extends EventEmitter {
         if (type === 'token') {
           this.emit('token', { content: (msg.content ?? '') as string });
         } else if (type === 'done') {
+          this._requestInFlight = false;
           this.lastSessionId = (msg.session_id as number) ?? null;
           this.lastModel = (msg.model as string) ?? '';
           this.emit('done', { session_id: this.lastSessionId, model: this.lastModel });
         } else if (type === 'error') {
+          this._requestInFlight = false;
           this.emit('error', { content: (msg.content ?? 'Erreur inconnue') as string });
         } else if (type === 'system') {
           this.emit('system', { content: (msg.content ?? '') as string });
@@ -73,6 +76,10 @@ export class JHClient extends EventEmitter {
       });
 
       ws.on('close', () => {
+        if (this._requestInFlight) {
+          this._requestInFlight = false;
+          this.emit('disconnect');
+        }
         this.ws = null;
       });
     });
@@ -84,6 +91,7 @@ export class JHClient extends EventEmitter {
     sessionId: number | null,
     model: string = '',
   ): Promise<void> {
+    this._requestInFlight = true;
     const ws = await this.connect();
     const payload: Record<string, unknown> = {
       type: 'message',
@@ -94,6 +102,129 @@ export class JHClient extends EventEmitter {
     };
     if (model) payload.model = model;
     ws.send(JSON.stringify(payload));
+  }
+
+  /**
+   * Envoie un message avec une image via HTTP multipart /api/multimodal.
+   * Émet les mêmes events que sendMessage : 'token', 'done', 'error'.
+   */
+  async sendMultimodal(
+    content: string,
+    imagePath: string,
+    sessionId: number | null,
+    model: string = '',
+  ): Promise<void> {
+    const { readFileSync } = await import('fs');
+    const { extname } = await import('path');
+    const imageBuffer = readFileSync(imagePath);
+    const ext = extname(imagePath).toLowerCase().replace('.', '') || 'png';
+    const mimeType = ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
+
+    process.stderr.write(`[debug] image: ${imagePath} (${imageBuffer.length} octets, ${mimeType})\n`);
+
+    const form = new FormData();
+    form.append('prompt', content);
+    form.append('image', new Blob([new Uint8Array(imageBuffer)], { type: mimeType }), `image.${ext}`);
+    if (sessionId !== null) form.append('session_id', String(sessionId));
+    if (model) form.append('model', model);
+
+    const resp = await fetch(`${this.config.server.url}/api/multimodal`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.creds.token}` },
+      body: form,
+    });
+
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => '');
+      this.emit('error', { content: `Multimodal HTTP ${resp.status}: ${body}` });
+      return;
+    }
+
+    process.stderr.write(`[debug] multimodal OK, session=${resp.headers.get('x-session-id')}\n`);
+
+    // Lire x-session-id depuis les headers
+    const sessionHeader = resp.headers.get('x-session-id');
+    if (sessionHeader) this.lastSessionId = parseInt(sessionHeader, 10);
+    const modelHeader = resp.headers.get('x-chosen-model');
+    if (modelHeader) this.lastModel = modelHeader;
+
+    // Streamer la réponse token par token
+    if (!resp.body) {
+      this.emit('done', { session_id: this.lastSessionId, model: this.lastModel });
+      return;
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        if (chunk) this.emit('token', { content: chunk });
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    this.emit('done', { session_id: this.lastSessionId, model: this.lastModel });
+  }
+
+  /**
+   * Envoie un enregistrement audio au backend /stt.
+   * Le backend transcrit + fait tourner l'agent et renvoie un StreamingResponse.
+   * Émet 'token', 'done', 'error' comme sendMessage.
+   */
+  async sendVoice(
+    audioBuffer: Buffer,
+    sessionId: number | null,
+    model: string = '',
+  ): Promise<void> {
+    const form = new FormData();
+    form.append('file', new Blob([new Uint8Array(audioBuffer)], { type: 'audio/wav' }), 'audio.wav');
+    if (sessionId !== null) form.append('session_id', String(sessionId));
+
+    const resp = await fetch(`${this.config.server.url}/stt`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.creds.token}` },
+      body: form,
+    });
+
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => '');
+      this.emit('error', { content: `STT HTTP ${resp.status}: ${body}` });
+      return;
+    }
+
+    const sessionHeader = resp.headers.get('x-session-id');
+    if (sessionHeader) this.lastSessionId = parseInt(sessionHeader, 10);
+    const modelHeader = resp.headers.get('x-chosen-model');
+    if (modelHeader) this.lastModel = modelHeader;
+
+    if (!resp.body) {
+      this.emit('done', { session_id: this.lastSessionId, model: this.lastModel });
+      return;
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        if (chunk) this.emit('token', { content: chunk });
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    this.emit('done', { session_id: this.lastSessionId, model: this.lastModel });
+  }
+
+  /** Signale une interruption utilisateur (Ctrl+C) au backend. */
+  sendInterrupt(): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'interrupt', user_id: this.creds.user_id }));
+    }
   }
 
   /** Envoie le résultat d'un outil local au serveur. */

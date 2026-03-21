@@ -56,8 +56,10 @@
 		height: 100%;
 		flex: 1;
 		min-width: 0;
+		min-height: 0;
 		display: flex;
 		flex-direction: column;
+		padding-bottom: env(safe-area-inset-bottom);
 	}
 
 	.chat-topbar {

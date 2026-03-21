@@ -15,6 +15,9 @@ export interface JHConfig {
   server: {
     url: string;
   };
+  stt: {
+    url: string;
+  };
   display: {
     markdown: boolean;
   };
@@ -25,6 +28,7 @@ export interface JHConfig {
 
 const DEFAULT_CONFIG: JHConfig = {
   server: { url: 'http://localhost:8000' },
+  stt: { url: 'http://localhost:8001' },
   display: { markdown: true },
   defaults: { session: 'last' },
 };
@@ -44,6 +48,7 @@ export function loadConfig(): JHConfig {
     const parsed = TOML.parse(raw) as Partial<JHConfig>;
     return {
       server: { url: (parsed.server?.url as string) ?? DEFAULT_CONFIG.server.url },
+      stt: { url: ((parsed as Record<string, Record<string, string>>)['stt']?.url) ?? DEFAULT_CONFIG.stt.url },
       display: { markdown: (parsed.display?.markdown as boolean) ?? DEFAULT_CONFIG.display.markdown },
       defaults: { session: (parsed.defaults?.session as 'last' | 'new') ?? DEFAULT_CONFIG.defaults.session },
     };
