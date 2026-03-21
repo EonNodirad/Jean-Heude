@@ -4,12 +4,14 @@
 import * as readline from 'readline';
 import * as fs from 'fs';
 import * as path from 'path';
+import chalk from 'chalk';
 import * as os from 'os';
 import { JHConfig, HISTORY_FILE, CONFIG_DIR } from './config.js';
 import { JHClient, ToolCallEvent, DoneEvent } from './client.js';
 import * as tools from './tools.js';
 import * as R from './renderer.js';
 import { askLine as kittyAskLine } from './kitty.js';
+import { recordAudio } from './voice.js';
 
 export type PermissionMode = 'ask' | 'auto' | 'plan';
 
@@ -17,12 +19,15 @@ export type PermissionMode = 'ask' | 'auto' | 'plan';
 
 function createRL(): readline.Interface {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  return readline.createInterface({
+  // historyFile est supporté par Node.js mais absent des types TS
+  const opts = {
     input: process.stdin,
     output: process.stdout,
     terminal: true,
     historySize: 500,
-  });
+    historyFile: HISTORY_FILE,
+  } as readline.ReadLineOptions;
+  return readline.createInterface(opts);
 }
 
 
@@ -40,6 +45,7 @@ export async function interactiveLoop(
 
   let currentSessionId = initialSessionId;
   let currentModel = initialModel;
+  let pendingImage: string | null = null;
 
   // Restaurer la dernière session si configuré
   if (currentSessionId === null && config.defaults.session === 'last') {
@@ -62,7 +68,8 @@ export async function interactiveLoop(
   const askLine = (): Promise<string | null> =>
     new Promise((resolve) => {
       const sessLabel = currentSessionId != null ? `#${currentSessionId}` : 'new';
-      kittyAskLine(rl, `\njh(${sessLabel})> `).then(resolve);
+      R.printInputHints(pendingImage);
+      kittyAskLine(rl, chalk.cyan('❯') + ' ').then(resolve);
       rl.once('close', () => resolve(null));
     });
 
@@ -85,7 +92,11 @@ export async function interactiveLoop(
 
     // ── Slash commands ──
     if (text.startsWith('/')) {
-      const result = await handleCommand(text, client, currentSessionId, currentModel, permissionMode, rl);
+      const result = await handleCommand(
+        text, client, currentSessionId, currentModel, permissionMode, rl, config,
+        (img) => { pendingImage = img; },
+        () => pendingImage,
+      );
       currentSessionId = result.sessionId;
       currentModel = result.model;
       permissionMode = result.permissionMode;
@@ -98,10 +109,20 @@ export async function interactiveLoop(
     let fullResponse = '';
 
     try {
-      await runAgenticTurn(client, text, currentSessionId, currentModel, permissionMode, (chunk) => {
-        R.printToken(chunk);
-        fullResponse += chunk;
-      });
+      if (pendingImage) {
+        const imgPath = pendingImage;
+        pendingImage = null;
+        R.printInfo(`📸 Envoi avec image : ${imgPath}`);
+        await runMultimodalTurn(client, text, imgPath, currentSessionId, currentModel, permissionMode, (chunk) => {
+          R.printToken(chunk);
+          fullResponse += chunk;
+        });
+      } else {
+        await runAgenticTurn(client, text, currentSessionId, currentModel, permissionMode, (chunk) => {
+          R.printToken(chunk);
+          fullResponse += chunk;
+        });
+      }
     } catch (e) {
       process.stdout.write('\n');
       R.printError(String(e));
@@ -109,11 +130,6 @@ export async function interactiveLoop(
     }
 
     process.stdout.write('\n');
-
-    // Rendu Markdown si activé
-    if (config.display.markdown && fullResponse.trim()) {
-      R.renderMarkdown(fullResponse);
-    }
 
     // Mettre à jour session_id
     if (client.lastSessionId != null) currentSessionId = client.lastSessionId;
@@ -136,15 +152,24 @@ export async function oneShot(
   cwd: string,
 ): Promise<void> {
   tools.setWorkingDir(cwd);
+  const isPiped = !process.stdout.isTTY;
   let fullResponse = '';
   try {
     await runAgenticTurn(client, message, sessionId, model, permissionMode, (chunk) => {
-      R.printToken(chunk);
+      if (isPiped) {
+        process.stderr.write(chunk);
+      } else {
+        R.printToken(chunk);
+      }
       fullResponse += chunk;
     });
-    process.stdout.write('\n');
-    if (config.display.markdown && fullResponse.trim()) {
-      R.renderMarkdown(fullResponse);
+    if (isPiped) {
+      process.stdout.write(fullResponse);
+    } else {
+      process.stdout.write('\n');
+      if (config.display.markdown && fullResponse.trim()) {
+        R.renderMarkdown(fullResponse);
+      }
     }
   } catch (e) {
     process.stdout.write('\n');
@@ -166,8 +191,36 @@ async function runAgenticTurn(
   onToken: (chunk: string) => void,
 ): Promise<void> {
   return new Promise(async (resolve, reject) => {
+    let interrupted = false;
+    let stopThinking: (() => void) | null = null;
+
+    const clearThinking = () => { stopThinking?.(); stopThinking = null; };
+
+    const sigintHandler = () => {
+      if (interrupted) return;
+      interrupted = true;
+      clearThinking();
+      process.stdout.write('\n');
+      R.printInfo('Interruption…');
+      client.sendInterrupt();
+      cleanup();
+      resolve();
+    };
+
+    process.once('SIGINT', sigintHandler);
+
+    const cleanup = () => {
+      clearThinking();
+      process.removeListener('SIGINT', sigintHandler);
+      client.removeListener('tool_call', toolCallHandler);
+      client.removeListener('done', doneHandler);
+      client.removeListener('error', errorHandler);
+      client.removeListener('disconnect', disconnectHandler);
+    };
+
     // Écouter les tool_calls de façon concurrente pendant le streaming
     const toolCallHandler = async (event: ToolCallEvent) => {
+      clearThinking();
       process.stdout.write('\n');
       R.printToolCall(event.name, event.args);
 
@@ -178,6 +231,9 @@ async function runAgenticTurn(
       }
 
       if (permissionMode === 'ask' && tools.isDestructive(event.name)) {
+        if (event.name === 'client_edit_file' && event.args.old_str && event.args.new_str) {
+          R.printDiff(event.args.old_str as string, event.args.new_str as string);
+        }
         const ok = await R.askPermission(event.name, event.args);
         if (!ok) {
           R.printInfo('Refusé.');
@@ -192,19 +248,23 @@ async function runAgenticTurn(
     };
 
     const doneHandler = () => {
-      client.removeListener('tool_call', toolCallHandler);
-      client.removeListener('error', errorHandler);
+      cleanup();
       resolve();
     };
 
     const errorHandler = (event: { content: string }) => {
-      client.removeListener('tool_call', toolCallHandler);
-      client.removeListener('done', doneHandler);
+      cleanup();
       reject(new Error(event.content));
     };
 
+    const disconnectHandler = () => {
+      cleanup();
+      reject(new Error('Connexion perdue — réponse incomplète'));
+    };
+
     client.on('token', (event: { content: string }) => {
-      // Filtrer les marqueurs internes
+      // Effacer le spinner au premier token
+      clearThinking();
       const chunk = event.content.replace(/\|\|AUDIO_ID:.*?\|\|/g, '');
       if (chunk && !chunk.startsWith('¶')) {
         onToken(chunk);
@@ -212,22 +272,134 @@ async function runAgenticTurn(
     });
 
     client.on('system', (event: { content: string }) => {
+      clearThinking();
       process.stdout.write('\n');
       R.printSystem(event.content);
     });
 
     client.once('done', doneHandler);
     client.once('error', errorHandler);
+    client.once('disconnect', disconnectHandler);
     client.on('tool_call', toolCallHandler);
 
     try {
       await client.sendMessage(message, sessionId, model);
+      stopThinking = R.startThinkingSpinner();
     } catch (e) {
-      client.removeListener('tool_call', toolCallHandler);
-      client.removeListener('done', doneHandler);
-      client.removeListener('error', errorHandler);
+      cleanup();
       reject(e);
     }
+  });
+}
+
+// ── Tour multimodal (image) ────────────────────────────────────────────────
+
+async function runMultimodalTurn(
+  client: JHClient,
+  message: string,
+  imagePath: string,
+  sessionId: number | null,
+  model: string,
+  permissionMode: PermissionMode,
+  onToken: (chunk: string) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let interrupted = false;
+    let stopThinking: (() => void) | null = null;
+
+    const clearThinking = () => { stopThinking?.(); stopThinking = null; };
+
+    const sigintHandler = () => {
+      if (interrupted) return;
+      interrupted = true;
+      clearThinking();
+      process.stdout.write('\n');
+      R.printInfo('Interruption…');
+      cleanup();
+      resolve();
+    };
+
+    process.once('SIGINT', sigintHandler);
+
+    const cleanup = () => {
+      clearThinking();
+      process.removeListener('SIGINT', sigintHandler);
+      client.removeListener('token', tokenHandler);
+      client.removeListener('done', doneHandler);
+      client.removeListener('error', errorHandler);
+    };
+
+    const tokenHandler = (event: { content: string }) => {
+      clearThinking();
+      const chunk = event.content.replace(/\|\|AUDIO_ID:.*?\|\|/g, '');
+      if (chunk && !chunk.startsWith('¶')) onToken(chunk);
+    };
+
+    const doneHandler = () => { cleanup(); resolve(); };
+    const errorHandler = (event: { content: string }) => { cleanup(); reject(new Error(event.content)); };
+
+    client.on('token', tokenHandler);
+    client.once('done', doneHandler);
+    client.once('error', errorHandler);
+
+    // Démarrer le spinner AVANT l'envoi, pas dans .then() (qui s'exécute trop tard)
+    stopThinking = R.startThinkingSpinner();
+    client.sendMultimodal(message, imagePath, sessionId, model)
+      .catch((e) => { cleanup(); reject(e); });
+  });
+}
+
+// ── Tour vocal ────────────────────────────────────────────────────────────
+
+async function runVoiceTurn(
+  client: JHClient,
+  audioBuffer: Buffer,
+  sessionId: number | null,
+  model: string,
+  onToken: (chunk: string) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let interrupted = false;
+    let stopThinking: (() => void) | null = null;
+
+    const clearThinking = () => { stopThinking?.(); stopThinking = null; };
+
+    const sigintHandler = () => {
+      if (interrupted) return;
+      interrupted = true;
+      clearThinking();
+      process.stdout.write('\n');
+      R.printInfo('Interruption…');
+      cleanup();
+      resolve();
+    };
+
+    process.once('SIGINT', sigintHandler);
+
+    const cleanup = () => {
+      clearThinking();
+      process.removeListener('SIGINT', sigintHandler);
+      client.removeListener('token', tokenHandler);
+      client.removeListener('done', doneHandler);
+      client.removeListener('error', errorHandler);
+    };
+
+    const tokenHandler = (event: { content: string }) => {
+      clearThinking();
+      const chunk = event.content.replace(/\|\|AUDIO_ID:.*?\|\|/g, '');
+      if (chunk && !chunk.startsWith('¶')) onToken(chunk);
+    };
+
+    const doneHandler = () => { cleanup(); resolve(); };
+    const errorHandler = (event: { content: string }) => { cleanup(); reject(new Error(event.content)); };
+
+    client.on('token', tokenHandler);
+    client.once('done', doneHandler);
+    client.once('error', errorHandler);
+
+    stopThinking = R.startThinkingSpinner();
+    client.sendVoice(audioBuffer, sessionId, model)
+      .catch((e) => { cleanup(); reject(e); });
   });
 }
 
@@ -247,6 +419,9 @@ async function handleCommand(
   model: string,
   permissionMode: PermissionMode,
   rl: readline.Interface,
+  config?: JHConfig,
+  setPendingImage?: (img: string | null) => void,
+  getPendingImage?: () => string | null,
 ): Promise<CommandResult> {
   const parts = text.trim().split(/\s+/);
   const cmd = parts[0].toLowerCase();
@@ -396,6 +571,53 @@ async function handleCommand(
       }
       fs.writeFileSync(filename, lines.join(''), 'utf-8');
       R.printSuccess(`Exporté dans : ${filename}`);
+      return noChange;
+    }
+
+    case '/voice': {
+      try {
+        const audioBuffer = await recordAudio();
+        process.stdout.write('\n');
+        await runVoiceTurn(client, audioBuffer, sessionId, model, (chunk: string) => {
+          R.printToken(chunk);
+        });
+        process.stdout.write('\n');
+      } catch (e) {
+        R.printError(String(e));
+      }
+      return noChange;
+    }
+
+    case '/attach': {
+      if (!arg) {
+        R.printError('Usage : /attach <chemin_image>');
+        return noChange;
+      }
+      const resolved = path.resolve(arg);
+      if (!fs.existsSync(resolved)) {
+        R.printError(`Fichier introuvable : ${resolved}`);
+        return noChange;
+      }
+      const ext = path.extname(resolved).toLowerCase();
+      const allowed = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
+      if (!allowed.includes(ext)) {
+        R.printError(`Format non supporté : ${ext}. Utiliser : ${allowed.join(', ')}`);
+        return noChange;
+      }
+      setPendingImage?.(resolved);
+      R.printSuccess(`Image en attente : ${resolved}`);
+      R.printInfo('  Tape ton message pour l\'envoyer avec l\'image.');
+      return noChange;
+    }
+
+    case '/detach': {
+      const current = getPendingImage?.();
+      if (!current) {
+        R.printInfo('Aucune image en attente.');
+      } else {
+        setPendingImage?.(null);
+        R.printSuccess('Image annulée.');
+      }
       return noChange;
     }
 

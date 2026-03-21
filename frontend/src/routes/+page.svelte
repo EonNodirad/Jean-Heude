@@ -114,6 +114,7 @@
 	.container-global {
 		display: flex;
 		height: 100vh;
+		height: 100dvh;
 		width: 100%;
 		background-color: #1a2238;
 		font-family: sans-serif;
