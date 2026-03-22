@@ -57,6 +57,80 @@ To get Jean-Heude up and running, you will need:
 
 ---
 
+## 🚢 Déploiement
+
+### Prérequis
+
+1. Créer `backend_python/.env` avec toutes les variables requises (voir CLAUDE.md)
+2. Créer `frontend/.env` :
+   ```
+   PUBLIC_URL_SERVEUR_PYTHON=http://<IP_LAN>:8000
+   ```
+3. Avoir Docker, Docker Compose et Ollama installés sur la machine hôte
+
+---
+
+### Développement (local)
+
+```bash
+./start.sh
+```
+
+Ce script lance les services Docker (Qdrant, TTS, STT, Frontend, Neo4j) puis démarre le backend FastAPI directement sur l'hôte dans un venv Python :
+
+```
+Frontend  → http://localhost:3004
+Backend   → http://localhost:8000
+```
+
+---
+
+### Production (LAN / serveur permanent)
+
+```bash
+sudo bash install-service.sh
+```
+
+Ce script :
+- Lance `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build` (override LAN IP)
+- Installe 3 services **systemd** qui démarrent automatiquement au boot :
+  - `jean-heude-backend.service` — FastAPI + Uvicorn
+  - `jean-heude-telegram.service` — bot Telegram
+  - `jean-heude-discord.service` — bot Discord
+
+Le fichier `docker-compose.prod.yml` injecte `PUBLIC_URL_SERVEUR_PYTHON` avec l'IP LAN réelle à la compilation du frontend (variable ARG Docker, baked dans le bundle).
+
+Vérifier l'état des services :
+```bash
+sudo systemctl status jean-heude-backend
+sudo journalctl -u jean-heude-backend -f
+```
+
+---
+
+### Gestion des admins
+
+#### Premier compte = admin automatique
+
+Le **premier compte** créé sur l'instance devient automatiquement administrateur (logique dans `backend_python/auth.py` → `ensure_first_admin()`).
+
+#### Promouvoir un utilisateur existant en admin
+
+**Via le dashboard** (recommandé) :
+1. Se connecter avec un compte admin
+2. Aller sur `/admin` → onglet **Utilisateurs**
+3. Cliquer sur **⬆ Admin** à côté du compte cible
+
+**Via l'API** (si le dashboard est inaccessible) :
+```bash
+curl -X POST http://localhost:8000/api/admin/users/<USER_ID>/set-admin \
+  -H "Authorization: Bearer <ADMIN_JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{"is_admin": true}'
+```
+
+---
+
 ## 📈 Version History
 
 ### **V5.1 (Current) — The "MCP Expansion" & Optimization Era**

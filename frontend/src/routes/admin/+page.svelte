@@ -3,6 +3,10 @@
 	import { goto } from '$app/navigation';
 	import { currentUser, authToken, isAdmin } from '$lib/stores';
 	import { PUBLIC_URL_SERVEUR_PYTHON } from '$env/static/public';
+	import hljs from 'highlight.js/lib/core';
+	import yamlLang from 'highlight.js/lib/languages/yaml';
+	import DOMPurify from 'isomorphic-dompurify';
+	hljs.registerLanguage('yaml', yamlLang);
 
 	const API = PUBLIC_URL_SERVEUR_PYTHON || 'http://localhost:8000';
 	const WS_BASE = API.replace(/^http/, 'ws');
@@ -36,8 +40,11 @@
 	let linkCodeExpiry = $state('');
 	let loading = $state(true);
 	let error = $state('');
-	let activeTab = $state<'users' | 'stats' | 'health' | 'sessions' | 'logs' | 'link'>('users');
+	let activeTab = $state<'users' | 'stats' | 'health' | 'sessions' | 'logs' | 'link' | 'mcp'>(
+		'users'
+	);
 	let statsWindow = $state(24);
+	let sidebarOpen = $state(false);
 	let confirmDelete = $state<string | null>(null);
 	let broadcastMsg = $state('');
 	let broadcastStatus = $state('');
@@ -54,8 +61,72 @@
 		['sessions', 'Sessions', '🗂️'],
 		['health', 'Services', '🩺'],
 		['logs', 'Logs', '📋'],
-		['link', 'Lier compte', '🔗']
+		['link', 'Lier compte', '🔗'],
+		['mcp', 'MCP Config', '🔌']
 	];
+
+	// ── MCP Config ──
+	let mcpYaml = $state('');
+	let highlightedYaml = $state('');
+	let mcpSaving = $state(false);
+	let mcpMsg = $state('');
+	let preEl: HTMLPreElement;
+
+	function updateHighlight() {
+		const raw = hljs.highlight(mcpYaml, { language: 'yaml', ignoreIllegals: true }).value;
+		highlightedYaml = DOMPurify.sanitize(raw);
+	}
+
+	function handleTab(e: KeyboardEvent) {
+		if (e.key !== 'Tab') return;
+		e.preventDefault();
+		const ta = e.target as HTMLTextAreaElement;
+		const start = ta.selectionStart;
+		mcpYaml = mcpYaml.slice(0, start) + '  ' + mcpYaml.slice(ta.selectionEnd);
+		updateHighlight();
+		requestAnimationFrame(() => {
+			ta.selectionStart = ta.selectionEnd = start + 2;
+		});
+	}
+
+	function syncScroll(e: Event) {
+		if (!preEl) return;
+		const ta = e.target as HTMLTextAreaElement;
+		preEl.scrollTop = ta.scrollTop;
+		preEl.scrollLeft = ta.scrollLeft;
+	}
+
+	async function loadMcpConfig() {
+		const res = await fetch(`${API}/api/admin/mcp-config`, { headers: headers() });
+		if (res.ok) {
+			const data = await res.json();
+			mcpYaml = data.content;
+			updateHighlight();
+		}
+	}
+
+	async function saveMcpConfig() {
+		mcpSaving = true;
+		mcpMsg = '';
+		try {
+			const res = await fetch(`${API}/api/admin/mcp-config`, {
+				method: 'PUT',
+				headers: headers(),
+				body: JSON.stringify({ content: mcpYaml })
+			});
+			if (res.ok) {
+				mcpMsg = '✅ Sauvegardé — rechargement auto en cours…';
+			} else {
+				const err = await res.json();
+				mcpMsg = `❌ ${err.detail}`;
+			}
+		} catch {
+			mcpMsg = '❌ Erreur réseau';
+		} finally {
+			mcpSaving = false;
+			setTimeout(() => (mcpMsg = ''), 5000);
+		}
+	}
 
 	function headers() {
 		return { Authorization: `Bearer ${$authToken}`, 'Content-Type': 'application/json' };
@@ -189,12 +260,14 @@
 
 	function onTabChange(tab: typeof activeTab) {
 		activeTab = tab;
+		sidebarOpen = false;
 		if (tab === 'logs') {
 			loadLogsOnce();
 			connectLogsWs();
 		} else {
 			disconnectLogsWs();
 		}
+		if (tab === 'mcp') loadMcpConfig();
 	}
 
 	onMount(async () => {
@@ -209,8 +282,21 @@
 </script>
 
 <div class="admin-shell">
+	<!-- Topbar mobile -->
+	<div class="mobile-topbar">
+		<button class="burger-btn" onclick={() => (sidebarOpen = !sidebarOpen)} aria-label="Menu"
+			>☰</button
+		>
+		<span class="mobile-title">J.E.A.N — Admin</span>
+	</div>
+
+	<!-- Overlay mobile -->
+	{#if sidebarOpen}
+		<div class="sidebar-overlay" onclick={() => (sidebarOpen = false)} aria-hidden="true"></div>
+	{/if}
+
 	<!-- Sidebar -->
-	<aside class="sidebar">
+	<aside class="sidebar" class:open={sidebarOpen}>
 		<div class="brand">J.E.A.N<br /><span>Admin</span></div>
 		<nav>
 			{#each navTabs as [id, label, icon] (id)}
@@ -496,6 +582,42 @@
 				</div>
 			{/if}
 		{/if}
+
+		<!-- ── Onglet MCP Config ── -->
+		{#if activeTab === 'mcp'}
+			<div class="section-header">
+				<h1>🔌 MCP Config</h1>
+				<button class="refresh-btn" onclick={loadMcpConfig}>↻ Recharger</button>
+			</div>
+			<p class="mcp-hint">
+				Édite <code>mcp_servers.yaml</code> directement. La sauvegarde déclenche un rechargement automatique
+				des outils (file watcher).
+			</p>
+			<div class="yaml-editor-wrap">
+				<!-- eslint-disable svelte/no-at-html-tags -->
+				<pre class="yaml-pre" bind:this={preEl} aria-hidden="true"><code
+						>{@html highlightedYaml}</code
+					></pre>
+				<!-- eslint-enable svelte/no-at-html-tags -->
+				<textarea
+					class="yaml-textarea"
+					bind:value={mcpYaml}
+					oninput={(e) => {
+						updateHighlight();
+						syncScroll(e);
+					}}
+					onscroll={syncScroll}
+					onkeydown={handleTab}
+					spellcheck={false}
+				></textarea>
+			</div>
+			<div class="mcp-actions">
+				<button class="btn-primary" onclick={saveMcpConfig} disabled={mcpSaving}>
+					{mcpSaving ? 'Sauvegarde…' : '💾 Sauvegarder'}
+				</button>
+				{#if mcpMsg}<span class="mcp-msg">{mcpMsg}</span>{/if}
+			</div>
+		{/if}
 	</main>
 </div>
 
@@ -528,6 +650,45 @@
 		min-height: 100vh;
 	}
 
+	/* Topbar mobile */
+	.mobile-topbar {
+		display: none;
+		position: fixed;
+		top: 0;
+		left: 0;
+		right: 0;
+		height: 52px;
+		background: #111827;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+		align-items: center;
+		gap: 12px;
+		padding: 0 16px;
+		z-index: 100;
+	}
+	.burger-btn {
+		all: unset;
+		cursor: pointer;
+		font-size: 1.4rem;
+		color: #f3f4f6;
+		line-height: 1;
+	}
+	.burger-btn:hover {
+		color: #e7644f;
+	}
+	.mobile-title {
+		font-size: 0.95rem;
+		font-weight: 700;
+		color: #e7644f;
+		letter-spacing: 0.05em;
+	}
+	.sidebar-overlay {
+		display: none;
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.5);
+		z-index: 150;
+	}
+
 	/* Sidebar */
 	.sidebar {
 		width: 220px;
@@ -537,6 +698,34 @@
 		flex-direction: column;
 		padding: 24px 12px;
 		border-right: 1px solid rgba(255, 255, 255, 0.06);
+	}
+
+	@media (max-width: 768px) {
+		.mobile-topbar {
+			display: flex;
+		}
+		.sidebar-overlay {
+			display: block;
+		}
+		.sidebar {
+			position: fixed;
+			top: 0;
+			left: 0;
+			height: 100dvh;
+			z-index: 200;
+			transform: translateX(-100%);
+			transition: transform 0.3s ease;
+			box-shadow: 4px 0 20px rgba(0, 0, 0, 0.5);
+		}
+		.sidebar.open {
+			transform: translateX(0);
+		}
+		.content {
+			padding: 80px 16px 24px;
+		}
+		.admin-shell {
+			flex-direction: column;
+		}
 	}
 	.brand {
 		font-size: 1.4rem;
@@ -980,6 +1169,90 @@
 	.code-exp {
 		font-size: 0.8rem;
 		color: #6b7280;
+	}
+
+	/* MCP Editor */
+	.mcp-hint {
+		color: #6b7280;
+		font-size: 0.85rem;
+		margin: 0 0 12px;
+		line-height: 1.5;
+	}
+	.mcp-hint code {
+		background: rgba(255, 255, 255, 0.08);
+		padding: 2px 6px;
+		border-radius: 4px;
+		color: #e7644f;
+	}
+	.yaml-editor-wrap {
+		display: grid;
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		border-radius: 12px;
+		background: #0a0f1a;
+	}
+	.yaml-pre,
+	.yaml-textarea {
+		grid-area: 1 / 1; /* même cellule → superposition */
+		margin: 0;
+		padding: 16px;
+		font-family: 'Fira Code', 'Courier New', monospace;
+		font-size: 0.85rem;
+		line-height: 1.6;
+		white-space: pre-wrap;
+		word-wrap: break-word;
+		overflow: auto;
+		box-sizing: border-box;
+		min-height: 420px;
+	}
+	.yaml-pre {
+		background: transparent;
+		pointer-events: none;
+		color: #d1fae5;
+	}
+	.yaml-pre code {
+		background: none;
+		font-size: inherit;
+		line-height: inherit;
+	}
+	.yaml-textarea {
+		position: relative; /* nécessaire pour z-index */
+		z-index: 1;
+		color: transparent;
+		background: transparent;
+		caret-color: #f3f4f6;
+		resize: vertical;
+		border: none;
+		outline: none;
+	}
+	/* Coloration syntaxique YAML */
+	.yaml-editor-wrap :global(.hljs-attr) {
+		color: #7dd3fc;
+	}
+	.yaml-editor-wrap :global(.hljs-string) {
+		color: #86efac;
+	}
+	.yaml-editor-wrap :global(.hljs-number) {
+		color: #fbbf24;
+	}
+	.yaml-editor-wrap :global(.hljs-literal) {
+		color: #f472b6;
+	}
+	.yaml-editor-wrap :global(.hljs-comment) {
+		color: #6b7280;
+		font-style: italic;
+	}
+	.yaml-editor-wrap :global(.hljs-bullet) {
+		color: #e7644f;
+	}
+	.mcp-actions {
+		display: flex;
+		align-items: center;
+		gap: 16px;
+		margin-top: 12px;
+	}
+	.mcp-msg {
+		font-size: 0.85rem;
+		color: #a3e635;
 	}
 
 	/* Modal */
