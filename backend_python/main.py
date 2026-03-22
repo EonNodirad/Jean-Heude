@@ -311,6 +311,26 @@ async def admin_broadcast(body: dict, _admin: str = Depends(get_admin_user)):
     await gateway.broadcast_system_message(message)
     return {"ok": True, "sent_to": len(gateway.active_connections)}
 
+@app.get("/api/admin/mcp-config")
+async def admin_get_mcp_config(_admin: str = Depends(get_admin_user)):
+    try:
+        with open("mcp_servers.yaml", "r", encoding="utf-8") as f:
+            return {"content": f.read()}
+    except FileNotFoundError:
+        return {"content": "mcp_servers:\n"}
+
+@app.put("/api/admin/mcp-config")
+async def admin_save_mcp_config(body: dict, _admin: str = Depends(get_admin_user)):
+    import yaml as _yaml
+    content = body.get("content", "")
+    try:
+        _yaml.safe_load(content)
+    except _yaml.YAMLError as e:
+        raise HTTPException(status_code=400, detail=f"YAML invalide : {e}")
+    with open("mcp_servers.yaml", "w", encoding="utf-8") as f:
+        f.write(content)
+    return {"status": "ok"}
+
 @app.get("/api/admin/logs")
 async def admin_logs(limit: int = 100, level: str = "", _admin: str = Depends(get_admin_user)):
     entries = list(_log_handler.records)
