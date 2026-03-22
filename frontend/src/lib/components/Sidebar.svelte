@@ -212,6 +212,7 @@
 			width: 80%;
 			max-width: 300px;
 			box-shadow: 4px 0 20px rgba(0, 0, 0, 0.5);
+			height: 100dvh; /* évite que le bas soit caché par la barre du navigateur */
 		}
 		.historique-windows.open {
 			transform: translateX(0);
