@@ -46,8 +46,10 @@ export function loadConfig(): JHConfig {
   try {
     const raw = readFileSync(CONFIG_FILE, 'utf-8');
     const parsed = TOML.parse(raw) as Partial<JHConfig>;
+    const rawUrl = (parsed.server?.url as string) ?? DEFAULT_CONFIG.server.url;
+    const serverUrl = rawUrl.startsWith('http') ? rawUrl : `http://${rawUrl}`;
     return {
-      server: { url: (parsed.server?.url as string) ?? DEFAULT_CONFIG.server.url },
+      server: { url: serverUrl },
       stt: { url: ((parsed as Record<string, Record<string, string>>)['stt']?.url) ?? DEFAULT_CONFIG.stt.url },
       display: { markdown: (parsed.display?.markdown as boolean) ?? DEFAULT_CONFIG.display.markdown },
       defaults: { session: (parsed.defaults?.session as 'last' | 'new') ?? DEFAULT_CONFIG.defaults.session },
@@ -55,6 +57,26 @@ export function loadConfig(): JHConfig {
   } catch {
     return DEFAULT_CONFIG;
   }
+}
+
+/** Écrit la config dans ~/.config/jh/config.toml */
+export function saveConfig(config: JHConfig): void {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  const tomlStr = [
+    `[server]`,
+    `url = "${config.server.url}"`,
+    ``,
+    `[stt]`,
+    `url = "${config.stt.url}"`,
+    ``,
+    `[display]`,
+    `markdown = ${config.display.markdown}`,
+    ``,
+    `[defaults]`,
+    `session = "${config.defaults.session}"`,
+    ``,
+  ].join('\n');
+  writeFileSync(CONFIG_FILE, tomlStr, 'utf-8');
 }
 
 /** Retourne l'URL WS correspondant à l'URL HTTP du serveur */

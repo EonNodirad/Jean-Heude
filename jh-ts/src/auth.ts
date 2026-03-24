@@ -8,6 +8,7 @@ export interface Credentials {
   token: string;
   user_id: string;
   is_admin: boolean;
+  server_url: string;
 }
 
 export function loadCredentials(): Credentials | null {
@@ -52,6 +53,7 @@ export async function login(serverUrl: string, userId: string, password: string)
     token: data.access_token,
     user_id: data.user_id,
     is_admin: data.is_admin ?? false,
+    server_url: serverUrl,
   };
   saveCredentials(creds);
   return creds;

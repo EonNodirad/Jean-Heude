@@ -90,6 +90,7 @@ export class JHClient extends EventEmitter {
     content: string,
     sessionId: number | null,
     model: string = '',
+    workingDir?: string,
   ): Promise<void> {
     this._requestInFlight = true;
     const ws = await this.connect();
@@ -101,6 +102,7 @@ export class JHClient extends EventEmitter {
       capabilities: ['client_tools'],
     };
     if (model) payload.model = model;
+    if (workingDir) payload.working_dir = workingDir;
     ws.send(JSON.stringify(payload));
   }
 

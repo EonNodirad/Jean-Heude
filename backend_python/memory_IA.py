@@ -173,9 +173,17 @@ CLIENT_TOOLS = [
         "description": "Exécute une commande shell sur la machine de l'utilisateur et retourne la sortie.",
         "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "Commande shell à exécuter"}, "timeout_ms": {"type": "integer", "description": "Timeout en millisecondes (défaut: 30000)"}}, "required": ["command"]},
     }},
+    {"type": "function", "function": {
+        "name": "client_list_directory",
+        "description": "Liste les fichiers et dossiers dans un répertoire sur la machine de l'utilisateur. Sans argument, liste le répertoire de travail courant. Utile pour explorer avant d'utiliser client_glob_files ou client_read_file.",
+        "parameters": {"type": "object", "properties": {"dir": {"type": "string", "description": "Chemin du répertoire à lister (optionnel, défaut: répertoire de travail courant)"}}, "required": []},
+    }},
 ]
 
 CLIENT_TOOL_NAMES = {t["function"]["name"] for t in CLIENT_TOOLS}
+
+# Backend tools supersédés par leurs équivalents client_* quand le CLI est connecté
+CLIENT_SUPERSEDES = {"read_file", "write_file", "execute_terminal"}
 
 
 async def chat_with_memories(history: list, chosen_model: str, user_id: str = "default_user", tool_callback=None) -> AsyncGenerator[str,Any]:
@@ -206,8 +214,10 @@ async def chat_with_memories(history: list, chosen_model: str, user_id: str = "d
 
 
     # Ajouter les outils client si un tool_callback est fourni
+    # Retirer les backend tools qui ont un équivalent client_* pour éviter les conflits de filesystem
     if tool_callback is not None:
-        available_tools = list(available_tools) + CLIENT_TOOLS
+        available_tools = [t for t in available_tools if t["function"]["name"] not in CLIENT_SUPERSEDES]
+        available_tools = available_tools + CLIENT_TOOLS
 
     async for chunk in execute_agent_loop(messages, chosen_model, available_tools, user_id=user_id, tool_callback=tool_callback):
         if not chunk.startswith("¶") and not chunk.startswith("||AUDIO_ID:"):
