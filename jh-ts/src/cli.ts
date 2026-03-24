@@ -215,15 +215,6 @@ async function runAgenticTurn(
 
     process.once('SIGINT', sigintHandler);
 
-    const cleanup = () => {
-      clearThinking();
-      process.removeListener('SIGINT', sigintHandler);
-      client.removeListener('tool_call', toolCallHandler);
-      client.removeListener('done', doneHandler);
-      client.removeListener('error', errorHandler);
-      client.removeListener('disconnect', disconnectHandler);
-    };
-
     // Écouter les tool_calls de façon concurrente pendant le streaming
     const toolCallHandler = async (event: ToolCallEvent) => {
       clearThinking();
@@ -253,6 +244,20 @@ async function runAgenticTurn(
       await client.sendToolResult(event.call_id, result.output, result.error);
     };
 
+    const tokenHandler = (event: { content: string }) => {
+      clearThinking();
+      const chunk = event.content.replace(/\|\|AUDIO_ID:.*?\|\|/g, '');
+      if (chunk && !chunk.startsWith('¶')) {
+        onToken(chunk);
+      }
+    };
+
+    const systemHandler = (event: { content: string }) => {
+      clearThinking();
+      process.stdout.write('\n');
+      R.printSystem(event.content);
+    };
+
     const doneHandler = () => {
       cleanup();
       resolve();
@@ -268,21 +273,19 @@ async function runAgenticTurn(
       reject(new Error('Connexion perdue — réponse incomplète'));
     };
 
-    client.on('token', (event: { content: string }) => {
-      // Effacer le spinner au premier token
+    const cleanup = () => {
       clearThinking();
-      const chunk = event.content.replace(/\|\|AUDIO_ID:.*?\|\|/g, '');
-      if (chunk && !chunk.startsWith('¶')) {
-        onToken(chunk);
-      }
-    });
+      process.removeListener('SIGINT', sigintHandler);
+      client.removeListener('token', tokenHandler);
+      client.removeListener('system', systemHandler);
+      client.removeListener('tool_call', toolCallHandler);
+      client.removeListener('done', doneHandler);
+      client.removeListener('error', errorHandler);
+      client.removeListener('disconnect', disconnectHandler);
+    };
 
-    client.on('system', (event: { content: string }) => {
-      clearThinking();
-      process.stdout.write('\n');
-      R.printSystem(event.content);
-    });
-
+    client.on('token', tokenHandler);
+    client.on('system', systemHandler);
     client.once('done', doneHandler);
     client.once('error', errorHandler);
     client.once('disconnect', disconnectHandler);

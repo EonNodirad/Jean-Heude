@@ -150,8 +150,8 @@ CLIENT_TOOLS = [
     }},
     {"type": "function", "function": {
         "name": "client_write_file",
-        "description": "Crée ou écrase un fichier sur la machine de l'utilisateur.",
-        "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]},
+        "description": "Crée ou écrase un fichier sur la machine de l'utilisateur. Écrire le contenu COMPLET et FINAL en un seul appel — ne jamais mettre de placeholder, de '...' ou de squelette incomplet.",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string", "description": "Contenu intégral du fichier. Doit être complet et prêt à l'emploi, pas un résumé ou une ébauche."}}, "required": ["path", "content"]},
     }},
     {"type": "function", "function": {
         "name": "client_edit_file",
@@ -175,7 +175,7 @@ CLIENT_TOOLS = [
     }},
     {"type": "function", "function": {
         "name": "client_list_directory",
-        "description": "Liste les fichiers et dossiers dans un répertoire sur la machine de l'utilisateur. Sans argument, liste le répertoire de travail courant. Utile pour explorer avant d'utiliser client_glob_files ou client_read_file.",
+        "description": "Liste les fichiers et dossiers dans un répertoire sur la machine de l'utilisateur. Sans argument, liste le répertoire de travail courant. À utiliser uniquement si tu ne connais pas encore les fichiers présents.",
         "parameters": {"type": "object", "properties": {"dir": {"type": "string", "description": "Chemin du répertoire à lister (optionnel, défaut: répertoire de travail courant)"}}, "required": []},
     }},
 ]
