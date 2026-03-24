@@ -160,8 +160,8 @@ CLIENT_TOOLS = [
     }},
     {"type": "function", "function": {
         "name": "client_glob_files",
-        "description": "Liste les fichiers correspondant à un pattern glob sur la machine de l'utilisateur.",
-        "parameters": {"type": "object", "properties": {"pattern": {"type": "string", "description": "Pattern glob (ex: **/*.py)"}, "dir": {"type": "string", "description": "Répertoire de recherche (optionnel, défaut: répertoire courant)"}}, "required": ["pattern"]},
+        "description": "Liste les fichiers correspondant à un pattern glob sur la machine de l'utilisateur. Le répertoire de base EST DÉJÀ le répertoire de travail courant — utiliser '**/*' pour tout lister, jamais 'project/**/*' ou un sous-dossier inventé.",
+        "parameters": {"type": "object", "properties": {"pattern": {"type": "string", "description": "Pattern glob relatif au répertoire courant (ex: '**/*' pour tout, '**/*.py' pour les Python)"}, "dir": {"type": "string", "description": "Sous-répertoire optionnel (ne pas l'utiliser si on veut chercher depuis la racine du projet)"}}, "required": ["pattern"]},
     }},
     {"type": "function", "function": {
         "name": "client_grep_files",
