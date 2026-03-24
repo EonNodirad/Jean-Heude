@@ -270,15 +270,17 @@ ${chalk.hex('#e7644f').bold('Slash commands :')}
 
   ${chalk.bold('/clear')}               Nouvelle session
   ${chalk.bold('/sessions')}            Lister les sessions et en changer
-  ${chalk.bold('/model [nom|list]')}     Changer de modèle, vide = auto, list = liste les modèles dispo
-  ${chalk.bold('/server [url]')}        Voir/changer l'URL du serveur (ex: http://192.168.1.10:8000)
   ${chalk.bold('/history [N]')}         Afficher les N derniers messages (défaut: 10)
   ${chalk.bold('/export')}              Exporter la session en Markdown
+  ${chalk.bold('/model [nom|list]')}    Changer de modèle, vide = auto, list = liste les dispo
+  ${chalk.bold('/server [url]')}        Voir/changer le serveur backend (sauvegardé)
   ${chalk.bold('/permissions [mode]')}  Mode : ask | auto | plan (actuel: ${chalk.cyan(mode)})
   ${chalk.bold('/cwd [chemin]')}        Voir/changer le répertoire de travail
-  ${chalk.bold('/voice')}               Enregistrer un message vocal (transcription STT)
   ${chalk.bold('/attach <chemin>')}     Joindre une image au prochain message
   ${chalk.bold('/detach')}              Annuler l'image en attente
+  ${chalk.bold('/voice')}               Enregistrer un message vocal (STT → agent)
+  ${chalk.bold('/login')}               Se connecter avec un autre compte (puis relancer jh)
+  ${chalk.bold('/logout')}              Se déconnecter
   ${chalk.bold('/help')}                Cette aide
   ${chalk.bold('/quit')} | ${chalk.bold('/exit')}        Quitter
 `);

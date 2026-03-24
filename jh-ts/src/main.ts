@@ -7,7 +7,7 @@ import { Command } from 'commander';
 import * as os from 'os';
 import * as path from 'path';
 
-import { loadConfig, wsUrl } from './config.js';
+import { loadConfig, saveConfig, wsUrl } from './config.js';
 import * as auth from './auth.js';
 import { JHClient } from './client.js';
 import * as R from './renderer.js';
@@ -83,7 +83,10 @@ program.action(async (message: string | undefined, opts: {
   cwd?: string;
 }) => {
   const conf = loadConfig();
-  if (opts.server) conf.server.url = opts.server.replace(/\/$/, '');
+  if (opts.server) {
+    conf.server.url = opts.server.replace(/\/$/, '');
+    saveConfig(conf);
+  }
 
   const creds = auth.loadCredentials();
   if (!creds) {
@@ -94,6 +97,11 @@ program.action(async (message: string | undefined, opts: {
   if (auth.isTokenExpired(creds.token)) {
     R.printError('Token expiré. Lance `jh login` pour te reconnecter.');
     process.exit(1);
+  }
+
+  // Si le token a été créé sur un serveur différent, utiliser ce serveur
+  if (creds.server_url && !opts.server && creds.server_url !== conf.server.url) {
+    conf.server.url = creds.server_url;
   }
 
   let sessionId: number | null = null;

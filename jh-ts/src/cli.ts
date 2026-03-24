@@ -5,13 +5,13 @@ import * as readline from 'readline';
 import * as fs from 'fs';
 import * as path from 'path';
 import chalk from 'chalk';
-import * as os from 'os';
-import { JHConfig, HISTORY_FILE, CONFIG_DIR } from './config.js';
-import { JHClient, ToolCallEvent, DoneEvent } from './client.js';
+import { JHConfig, HISTORY_FILE, CONFIG_DIR, saveConfig } from './config.js';
+import { JHClient, ToolCallEvent } from './client.js';
 import * as tools from './tools.js';
 import * as R from './renderer.js';
-import { askLine as kittyAskLine } from './kitty.js';
+import { askLine as kittyAskLine, askPassword } from './kitty.js';
 import { recordAudio } from './voice.js';
+import * as auth from './auth.js';
 
 export type PermissionMode = 'ask' | 'auto' | 'plan';
 
@@ -43,6 +43,7 @@ export async function interactiveLoop(
 ): Promise<void> {
   tools.setWorkingDir(cwd);
 
+  let activeClient = client;
   let currentSessionId = initialSessionId;
   let currentModel = initialModel;
   let pendingImage: string | null = null;
@@ -50,7 +51,7 @@ export async function interactiveLoop(
   // Restaurer la dernière session si configuré
   if (currentSessionId === null && config.defaults.session === 'last') {
     try {
-      const sessions = await client.getSessions();
+      const sessions = await activeClient.getSessions();
       if (sessions.length > 0) {
         currentSessionId = sessions[0]['id'] as number;
         R.printInfo(`Session #${currentSessionId} reprise : ${String(sessions[0]['resume'] ?? '').slice(0, 60)}`);
@@ -60,14 +61,13 @@ export async function interactiveLoop(
     }
   }
 
-  R.printBanner(client.creds.user_id, config.server.url, currentModel);
+  R.printBanner(activeClient.creds.user_id, config.server.url, currentModel);
   R.printWorkingDir(tools.getWorkingDir());
 
   const rl = createRL();
 
   const askLine = (): Promise<string | null> =>
     new Promise((resolve) => {
-      const sessLabel = currentSessionId != null ? `#${currentSessionId}` : 'new';
       R.printInputHints(pendingImage);
       kittyAskLine(rl, chalk.cyan('❯') + ' ').then(resolve);
       rl.once('close', () => resolve(null));
@@ -93,13 +93,19 @@ export async function interactiveLoop(
     // ── Slash commands ──
     if (text.startsWith('/')) {
       const result = await handleCommand(
-        text, client, currentSessionId, currentModel, permissionMode, rl, config,
+        text, activeClient, currentSessionId, currentModel, permissionMode, rl, config,
         (img) => { pendingImage = img; },
         () => pendingImage,
       );
       currentSessionId = result.sessionId;
       currentModel = result.model;
       permissionMode = result.permissionMode;
+      if (result.newClient) {
+        activeClient.close();
+        activeClient = result.newClient;
+        currentSessionId = null;
+        R.printBanner(activeClient.creds.user_id, activeClient.config.server.url, currentModel);
+      }
       if (result.quit) break;
       continue;
     }
@@ -113,12 +119,12 @@ export async function interactiveLoop(
         const imgPath = pendingImage;
         pendingImage = null;
         R.printInfo(`📸 Envoi avec image : ${imgPath}`);
-        await runMultimodalTurn(client, text, imgPath, currentSessionId, currentModel, permissionMode, (chunk) => {
+        await runMultimodalTurn(activeClient, text, imgPath, currentSessionId, currentModel, permissionMode, (chunk) => {
           R.printToken(chunk);
           fullResponse += chunk;
         });
       } else {
-        await runAgenticTurn(client, text, currentSessionId, currentModel, permissionMode, (chunk) => {
+        await runAgenticTurn(activeClient, text, currentSessionId, currentModel, permissionMode, (chunk) => {
           R.printToken(chunk);
           fullResponse += chunk;
         });
@@ -132,12 +138,12 @@ export async function interactiveLoop(
     process.stdout.write('\n');
 
     // Mettre à jour session_id
-    if (client.lastSessionId != null) currentSessionId = client.lastSessionId;
-    if (client.lastModel) currentModel = client.lastModel;
+    if (activeClient.lastSessionId != null) currentSessionId = activeClient.lastSessionId;
+    if (activeClient.lastModel) currentModel = activeClient.lastModel;
   }
 
   rl.close();
-  client.close();
+  activeClient.close();
 }
 
 // ── Mode one-shot ─────────────────────────────────────────────────────────
@@ -283,7 +289,7 @@ async function runAgenticTurn(
     client.on('tool_call', toolCallHandler);
 
     try {
-      await client.sendMessage(message, sessionId, model);
+      await client.sendMessage(message, sessionId, model, tools.getWorkingDir());
       stopThinking = R.startThinkingSpinner();
     } catch (e) {
       cleanup();
@@ -410,6 +416,7 @@ interface CommandResult {
   model: string;
   permissionMode: PermissionMode;
   quit: boolean;
+  newClient?: JHClient;
 }
 
 async function handleCommand(
@@ -474,11 +481,43 @@ async function handleCommand(
       if (arg) {
         const url = arg.replace(/\/$/, '');
         client.config.server.url = url;
-        R.printSuccess(`Serveur : ${url}`);
+        if (config) {
+          config.server.url = url;
+          saveConfig(config);
+        }
+        R.printSuccess(`Serveur : ${url} (sauvegardé)`);
+        R.printInfo('  Note : relance `jh login` si tu changes de compte sur ce serveur.');
       } else {
         R.printInfo(`Serveur actuel : ${client.config.server.url}`);
       }
       return noChange;
+    }
+
+    case '/logout': {
+      try {
+        await auth.logout(client.config.server.url, client.creds.token);
+        R.printSuccess('Déconnecté. Utilise /login pour te reconnecter.');
+      } catch (e) {
+        R.printError(`Erreur logout : ${e}`);
+      }
+      return noChange;
+    }
+
+    case '/login': {
+      const serverUrl = client.config.server.url;
+      R.printInfo(`Connexion à ${serverUrl}`);
+      try {
+        const userId = (await kittyAskLine(rl, 'Pseudo : ')).trim();
+        const password = await askPassword('Mot de passe : ');
+        const creds = await auth.login(serverUrl, userId, password);
+        R.printSuccess(`Connecté en tant que ${creds.user_id}`);
+        if (creds.is_admin) R.printInfo('(compte administrateur)');
+        const newClient = new JHClient(client.config, creds);
+        return { ...noChange, newClient, sessionId: null };
+      } catch (e) {
+        R.printError(String(e));
+        return noChange;
+      }
     }
 
     case '/permissions': {

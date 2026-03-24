@@ -28,6 +28,8 @@ class Gateway:
         self.workers: dict[str, asyncio.Task] = {}
         # Capacités déclarées par chaque client (ex: {"client_tools"})
         self.client_capabilities: dict[str, set] = {}
+        # Répertoire de travail déclaré par le CLI client
+        self.client_working_dirs: dict[str, str] = {}
         # Futures en attente de tool_result, indexées par call_id
         self.pending_tool_calls: dict[str, asyncio.Future] = {}
 
@@ -113,11 +115,14 @@ class Gateway:
                 })
             return
 
-        # Stocker les capacités déclarées dès le premier message
+        # Stocker les capacités et le répertoire de travail déclarés dès le premier message
         if data.get("type") == "message":
             caps = data.get("capabilities", [])
             if caps:
                 self.client_capabilities[client_id] = set(caps)
+            working_dir = data.get("working_dir")
+            if working_dir:
+                self.client_working_dirs[client_id] = working_dir
 
         if client_id in self.lanes:
             await self.lanes[client_id].put(data)
@@ -152,7 +157,8 @@ class Gateway:
                             return result.get("content") or ""
 
                     # 🎯 Appel de l'Agent Runner
-                    result = await self.agent_runner.process_chat(content, session_id, user_id, on_token, tool_callback=tool_callback)
+                    working_dir = self.client_working_dirs.get(client_id)
+                    result = await self.agent_runner.process_chat(content, session_id, user_id, on_token, tool_callback=tool_callback, working_dir=working_dir)
 
                     # Signal de fin
                     await websocket.send_json({
