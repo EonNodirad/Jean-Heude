@@ -15,6 +15,23 @@ import * as auth from './auth.js';
 
 export type PermissionMode = 'ask' | 'auto' | 'plan';
 
+// ── Contexte projet (README.md / CLAUDE.md) ───────────────────────────────
+
+function readProjectContext(workingDir: string): string | null {
+  const candidates = ['CLAUDE.md', 'README.md'];
+  const parts: string[] = [];
+  for (const name of candidates) {
+    const full = path.join(workingDir, name);
+    if (fs.existsSync(full)) {
+      try {
+        const content = fs.readFileSync(full, 'utf-8').slice(0, 6000);
+        parts.push(`=== ${name} ===\n${content}`);
+      } catch { /* ignorer */ }
+    }
+  }
+  return parts.length > 0 ? parts.join('\n\n') : null;
+}
+
 // ── Readline avec historique ──────────────────────────────────────────────
 
 function createRL(): readline.Interface {
@@ -69,8 +86,11 @@ export async function interactiveLoop(
   const askLine = (): Promise<string | null> =>
     new Promise((resolve) => {
       R.printInputHints(pendingImage);
-      kittyAskLine(rl, chalk.cyan('❯') + ' ').then(resolve);
-      rl.once('close', () => resolve(null));
+      const closeHandler = () => resolve(null);
+      rl.once('close', closeHandler);
+      kittyAskLine(rl, chalk.cyan('❯') + ' ')
+        .then((line) => { rl.removeListener('close', closeHandler); resolve(line); })
+        .catch(() => { rl.removeListener('close', closeHandler); resolve(null); });
     });
 
   // eslint-disable-next-line no-constant-condition
@@ -124,10 +144,11 @@ export async function interactiveLoop(
           fullResponse += chunk;
         });
       } else {
+        const projectCtx = readProjectContext(tools.getWorkingDir());
         await runAgenticTurn(activeClient, text, currentSessionId, currentModel, permissionMode, (chunk) => {
           R.printToken(chunk);
           fullResponse += chunk;
-        });
+        }, projectCtx);
       }
     } catch (e) {
       process.stdout.write('\n');
@@ -195,6 +216,7 @@ async function runAgenticTurn(
   model: string,
   permissionMode: PermissionMode,
   onToken: (chunk: string) => void,
+  projectContext?: string | null,
 ): Promise<void> {
   return new Promise(async (resolve, reject) => {
     let interrupted = false;
@@ -292,7 +314,7 @@ async function runAgenticTurn(
     client.on('tool_call', toolCallHandler);
 
     try {
-      await client.sendMessage(message, sessionId, model, tools.getWorkingDir());
+      await client.sendMessage(message, sessionId, model, tools.getWorkingDir(), projectContext ?? undefined);
       stopThinking = R.startThinkingSpinner();
     } catch (e) {
       cleanup();

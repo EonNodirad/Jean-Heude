@@ -22,12 +22,17 @@ export function restoreKitty(): void {
  * Retourne la réponse de l'utilisateur.
  */
 export function askLine(rl: import('readline').Interface, question: string): Promise<string> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     disableKitty();
-    rl.question(question, (answer) => {
+    try {
+      rl.question(question, (answer) => {
+        restoreKitty();
+        resolve(answer);
+      });
+    } catch (e) {
       restoreKitty();
-      resolve(answer);
-    });
+      reject(e);
+    }
   });
 }
 

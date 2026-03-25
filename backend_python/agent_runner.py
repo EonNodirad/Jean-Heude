@@ -129,7 +129,7 @@ class AgentRunner:
     # _recall_web_knowledge a été déplacé dans memory_manager.py
         
     @session_guard
-    async def process_chat(self, text_content: str, session_id: int | None, user_id: str, on_token_callback, is_hidden: bool = False, tool_callback=None, working_dir: str | None = None):
+    async def process_chat(self, text_content: str, session_id: int | None, user_id: str, on_token_callback, is_hidden: bool = False, tool_callback=None, working_dir: str | None = None, project_context: str | None = None):
         # 1. Gestion Session
         if session_id is None:
             resume = text_content[:30] + "..."
@@ -174,6 +174,13 @@ class AgentRunner:
                 f"Répertoire de travail actuel : {working_dir}\n"
                 f"Les outils client_* opèrent depuis ce répertoire. Utilise des chemins RELATIFS. "
                 f"En cas de doute sur les fichiers disponibles, appelle client_list_directory sans argument."
+            )
+
+        if project_context:
+            system_content += (
+                f"\n\n=== CONTEXTE DU PROJET (fichiers de référence) ===\n"
+                f"{project_context}\n"
+                f"=== FIN DU CONTEXTE PROJET ==="
             )
 
         # Récupération de l'historique de conversation (les 20 derniers messages)
