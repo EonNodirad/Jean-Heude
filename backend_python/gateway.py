@@ -30,6 +30,7 @@ class Gateway:
         self.client_capabilities: dict[str, set] = {}
         # Répertoire de travail déclaré par le CLI client
         self.client_working_dirs: dict[str, str] = {}
+        self.client_project_contexts: dict[str, str] = {}
         # Futures en attente de tool_result, indexées par call_id
         self.pending_tool_calls: dict[str, asyncio.Future] = {}
 
@@ -123,6 +124,11 @@ class Gateway:
             working_dir = data.get("working_dir")
             if working_dir:
                 self.client_working_dirs[client_id] = working_dir
+            project_context = data.get("project_context")
+            if project_context:
+                self.client_project_contexts[client_id] = project_context
+            elif working_dir:
+                self.client_project_contexts.pop(client_id, None)
 
         if client_id in self.lanes:
             await self.lanes[client_id].put(data)
@@ -158,7 +164,8 @@ class Gateway:
 
                     # 🎯 Appel de l'Agent Runner
                     working_dir = self.client_working_dirs.get(client_id)
-                    result = await self.agent_runner.process_chat(content, session_id, user_id, on_token, tool_callback=tool_callback, working_dir=working_dir)
+                    project_context = self.client_project_contexts.get(client_id)
+                    result = await self.agent_runner.process_chat(content, session_id, user_id, on_token, tool_callback=tool_callback, working_dir=working_dir, project_context=project_context)
 
                     # Signal de fin
                     await websocket.send_json({

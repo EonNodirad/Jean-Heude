@@ -185,6 +185,13 @@ CLIENT_TOOL_NAMES = {t["function"]["name"] for t in CLIENT_TOOLS}
 # Backend tools supersédés par leurs équivalents client_* quand le CLI est connecté
 CLIENT_SUPERSEDES = {"read_file", "write_file", "execute_terminal"}
 
+# Redirection automatique si le modèle hallucine un backend tool quand le CLI est connecté
+CLIENT_REDIRECT: dict[str, tuple[str, callable]] = {
+    "write_file":       ("client_write_file", lambda a: {"path": a.get("file_path", ""), "content": a.get("content", "")}),
+    "read_file":        ("client_read_file",  lambda a: {"path": a.get("file_path", "")}),
+    "execute_terminal": ("client_run_bash",   lambda a: {"command": a.get("command", "")}),
+}
+
 
 async def chat_with_memories(history: list, chosen_model: str, user_id: str = "default_user", tool_callback=None) -> AsyncGenerator[str,Any]:
     
@@ -318,7 +325,14 @@ async def execute_agent_loop(messages: list, chosen_model: str, available_tools:
                     yield f"||AUDIO_ID:{status_audio_id}||"
 
                 # Outils côté client : déléguer au CLI via tool_callback
-                if call.function.name in CLIENT_TOOL_NAMES and tool_callback is not None:
+                if tool_callback is not None and call.function.name in CLIENT_REDIRECT:
+                    # Le modèle a halluciné un backend tool qui a un équivalent client → rediriger
+                    import json as _json
+                    raw = call.function.arguments
+                    args = _json.loads(raw) if isinstance(raw, str) else (raw or {})
+                    client_name, remap = CLIENT_REDIRECT[call.function.name]
+                    result = await tool_callback(client_name, remap(args))
+                elif call.function.name in CLIENT_TOOL_NAMES and tool_callback is not None:
                     result = await tool_callback(call.function.name, call.function.arguments)
                 else:
                     result = await tools.call_tool_execution(call.function.name, call.function.arguments, user_id)
