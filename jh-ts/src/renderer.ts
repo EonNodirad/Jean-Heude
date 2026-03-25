@@ -5,6 +5,8 @@ import chalk from 'chalk';
 import { marked } from 'marked';
 // @ts-ignore — marked-terminal n'a pas toujours des types
 import TerminalRenderer from 'marked-terminal';
+import type { Interface as RLInterface } from 'readline';
+import { askLine as kittyAskLine } from './kitty.js';
 
 marked.setOptions({ renderer: new TerminalRenderer() });
 
@@ -73,7 +75,7 @@ function formatArgs(args: Record<string, unknown>): string {
 
 // ── Permissions ───────────────────────────────────────────────────────────
 
-export async function askPermission(name: string, args: Record<string, unknown>): Promise<boolean> {
+export async function askPermission(name: string, args: Record<string, unknown>, rl: RLInterface): Promise<boolean> {
   const clientName = name.replace(/^client_/, '');
   const argsStr = formatArgs(args);
   process.stdout.write(
@@ -82,24 +84,9 @@ export async function askPermission(name: string, args: Record<string, unknown>)
     chalk.yellow(` ? `) +
     chalk.dim(`[y/N] `),
   );
-
-  // Désactiver Kitty keyboard pour la saisie
-  if ((process.stdout as NodeJS.WriteStream).isTTY) process.stdout.write('\x1b[>0u');
-
-  return new Promise((resolve) => {
-    const stdin = process.stdin as NodeJS.ReadStream;
-    if (stdin.isTTY) stdin.setRawMode(true);
-    stdin.setEncoding('utf8');
-    stdin.resume();
-    stdin.once('data', (data) => {
-      if (stdin.isTTY) stdin.setRawMode(false);
-      stdin.pause();
-      if ((process.stdout as NodeJS.WriteStream).isTTY) process.stdout.write('\x1b[<u');
-      const answer = data.toString().replace(/\x1b\[[^a-zA-Z]*[a-zA-Z]/g, '').trim().toLowerCase();
-      process.stdout.write('\n');
-      resolve(answer === 'y' || answer === 'yes' || answer === 'o' || answer === 'oui');
-    });
-  });
+  const answer = (await kittyAskLine(rl, '')).trim().toLowerCase();
+  process.stdout.write('\n');
+  return answer === 'y' || answer === 'yes' || answer === 'o' || answer === 'oui';
 }
 
 // ── Messages ──────────────────────────────────────────────────────────────
