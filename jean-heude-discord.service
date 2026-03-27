@@ -28,6 +28,8 @@ ExecStart=<CHEMIN_ABSOLU>/backend_python/.venv/bin/python discord_gateway.py
 
 Restart=always
 RestartSec=10
+MemoryMax=256M
+MemoryHigh=200M
 StandardOutput=journal
 StandardError=journal
 

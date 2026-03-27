@@ -7,6 +7,10 @@ services:
       - "6333:6333"
     volumes:
       - ./qdrant_storage:/qdrant/storage
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   # Le backend tourne directement sur l'hôte (voir start.sh / jean-heude-backend.service)
   # Cela lui permet d'accéder au système de fichiers et aux processus hôte (skills execute_terminal, etc.)
@@ -22,6 +26,10 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "8002:8002"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
   stt:
     build:
       context: ./backend_python/stt
@@ -35,6 +43,10 @@ services:
       - "8001:8001"
     volumes:
       - whisper_cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        limits:
+          memory: 512M
   frontend:
     build:
       context: ./frontend
@@ -46,6 +58,10 @@ services:
       - "3004:3000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
   neo4j:
     image: neo4j:5.26.0
     restart: always
@@ -55,9 +71,16 @@ services:
     environment:
       - NEO4J_AUTH=neo4j/jeanheude_password # Le login et mot de passe par défaut
       - NEO4J_PLUGINS=["apoc"] # Outils avancés pour les requêtes complexes
+      - NEO4J_server_memory_heap_initial__size=128m
+      - NEO4J_server_memory_heap_max__size=512m
+      - NEO4J_server_memory_pagecache__size=256m
     volumes:
       - ./neo4j_data:/data
       - ./neo4j_logs:/logs
+    deploy:
+      resources:
+        limits:
+          memory: 1G
 
 volumes:
   whisper_cache:

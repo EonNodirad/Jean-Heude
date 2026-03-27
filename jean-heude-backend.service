@@ -35,6 +35,8 @@ ExecStart=<CHEMIN_ABSOLU>/backend_python/.venv/bin/uvicorn main:app --host 0.0.0
 
 Restart=always
 RestartSec=5
+MemoryMax=512M
+MemoryHigh=400M
 StandardOutput=journal
 StandardError=journal
 

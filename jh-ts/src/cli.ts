@@ -148,7 +148,7 @@ export async function interactiveLoop(
         await runAgenticTurn(activeClient, text, currentSessionId, currentModel, permissionMode, (chunk) => {
           R.printToken(chunk);
           fullResponse += chunk;
-        }, projectCtx);
+        }, projectCtx, rl);
       }
     } catch (e) {
       process.stdout.write('\n');
@@ -217,6 +217,7 @@ async function runAgenticTurn(
   permissionMode: PermissionMode,
   onToken: (chunk: string) => void,
   projectContext?: string | null,
+  rl?: readline.Interface,
 ): Promise<void> {
   return new Promise(async (resolve, reject) => {
     let interrupted = false;
@@ -253,7 +254,7 @@ async function runAgenticTurn(
         if (event.name === 'client_edit_file' && event.args.old_str && event.args.new_str) {
           R.printDiff(event.args.old_str as string, event.args.new_str as string);
         }
-        const ok = await R.askPermission(event.name, event.args);
+        const ok = rl ? await R.askPermission(event.name, event.args, rl) : false;
         if (!ok) {
           R.printInfo('Refusé.');
           await client.sendToolResult(event.call_id, null, 'Refusé par l\'utilisateur');
