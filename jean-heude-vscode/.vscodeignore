@@ -1,0 +1,11 @@
+.vscode/**
+**/.git/**
+**/node_modules/**
+webview/src/**
+webview/index.html
+webview/vite.config.mts
+webview/tsconfig.json
+src/**
+esbuild.config.mjs
+tsconfig.json
+**/*.map

@@ -1,0 +1,64 @@
+{
+  "name": "jean-heude-vscode",
+  "displayName": "Jean-Heude",
+  "description": "Orchestrateur IA local multimodal — interface VS Code",
+  "version": "0.1.0",
+  "publisher": "jean-heude",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["AI", "Chat"],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "icon": "resources/icon.png",
+  "contributes": {
+    "commands": [
+      {
+        "command": "jh.openPanel",
+        "title": "Jean-Heude: Ouvrir le chat",
+        "icon": "$(comment-discussion)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "jean-heude-sidebar",
+          "title": "Jean-Heude",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "jean-heude-sidebar": [
+        {
+          "type": "webview",
+          "id": "jh.chatView",
+          "name": "Chat"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build:webview": "vite build --config webview/vite.config.mts",
+    "build:ext": "node esbuild.config.mjs",
+    "build": "npm run build:webview && npm run build:ext",
+    "watch:webview": "vite build --config webview/vite.config.mts --watch",
+    "watch:ext": "node esbuild.config.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "package": "npm run build && vsce package --allow-missing-repository"
+  },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "glob": "^11.0.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^4.0.0",
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "@types/ws": "^8.5.0",
+    "esbuild": "^0.24.0",
+    "marked": "^12.0.0",
+    "svelte": "^5.0.0",
+    "typescript": "^5.0.0",
+    "vite": "^5.0.0"
+  }
+}
